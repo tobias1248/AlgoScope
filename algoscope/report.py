@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from algoscope.models import ComplexityScore, Measurement
+from algoscope.summary import ReportSummary
 from algoscope.utils import fmt_int, fmt_ms
 
 
@@ -24,15 +25,16 @@ class HtmlReportRenderer:
         scores: list[ComplexityScore],
         metadata: dict[str, Any],
         output_dir: Path,
+        summary: ReportSummary | None = None,
     ) -> Path:
         output_dir.mkdir(parents=True, exist_ok=True)
         slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", program.stem).strip("-") or "report"
         report_path = output_dir / f"{slug}-report.html"
         json_path = output_dir / f"{slug}-data.json"
 
-        self._write_json(json_path, program, rows, estimate, scores, metadata)
+        self._write_json(json_path, program, rows, estimate, scores, metadata, summary)
         report_path.write_text(
-            self._render_html(program, rows, estimate, scores, metadata, json_path),
+            self._render_html(program, rows, estimate, scores, metadata, json_path, summary),
             encoding="utf-8",
         )
         return report_path
@@ -45,6 +47,7 @@ class HtmlReportRenderer:
         estimate: str,
         scores: list[ComplexityScore],
         metadata: dict[str, Any],
+        summary: ReportSummary | None,
     ) -> None:
         data = {
             "program": str(program),
@@ -52,6 +55,7 @@ class HtmlReportRenderer:
             "metadata": metadata,
             "measurements": [asdict(row) for row in rows],
             "model_scores": [asdict(score) for score in scores],
+            "llm_summary": asdict(summary) if summary else None,
         }
         json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
@@ -63,9 +67,11 @@ class HtmlReportRenderer:
         scores: list[ComplexityScore],
         metadata: dict[str, Any],
         json_path: Path,
+        summary: ReportSummary | None,
     ) -> str:
         table_rows = self._render_measurement_rows(rows)
         score_rows = self._render_score_rows(scores)
+        summary_section = self._render_summary(summary)
         unavailable_note = ""
         if metadata.get("strace") == "unavailable":
             unavailable_note = (
@@ -154,6 +160,27 @@ class HtmlReportRenderer:
       color: #263033;
       white-space: nowrap;
     }}
+    .llm-summary {{
+      border-left: 4px solid var(--accent);
+      padding: 4px 0 4px 16px;
+    }}
+    .llm-summary h3, .llm-summary h4 {{
+      margin: 12px 0 8px;
+      color: var(--text);
+    }}
+    .llm-summary p {{ color: var(--text); margin: 0 0 10px; }}
+    .llm-summary ul, .llm-summary ol {{ margin: 0 0 12px 20px; padding: 0; }}
+    .llm-summary li {{ margin: 7px 0; color: var(--text); }}
+    .llm-summary strong {{ color: #111719; font-weight: 750; }}
+    .llm-summary pre {{
+      margin: 10px 0 14px;
+      padding: 12px;
+      overflow-x: auto;
+      border-radius: 6px;
+      background: #1f282b;
+      color: #edf2ef;
+    }}
+    .llm-summary pre code {{ background: transparent; color: inherit; padding: 0; }}
     code {{ background: #eef1ef; border-radius: 4px; padding: 2px 5px; }}
     @media (max-width: 760px) {{
       header, main {{ padding-left: 16px; padding-right: 16px; }}
@@ -175,6 +202,7 @@ class HtmlReportRenderer:
   </header>
   <main>
     {unavailable_note}
+    {summary_section}
     <section>
       <h2>Measurements</h2>
       <table>
@@ -282,6 +310,119 @@ class HtmlReportRenderer:
           """
             )
         return "\n".join(rendered)
+
+    @staticmethod
+    def _render_summary(summary: ReportSummary | None) -> str:
+        if summary is None:
+            return ""
+
+        return f"""
+    <section>
+      <h2>{html.escape(summary.title)}</h2>
+      <p class="status">Provider: {html.escape(summary.provider)} · Status: {html.escape(summary.status)}</p>
+      <div class="llm-summary">
+        {HtmlReportRenderer._markdownish_to_html(summary.body)}
+      </div>
+    </section>
+    """
+
+    @staticmethod
+    def _markdownish_to_html(text: str) -> str:
+        raw_lines = text.splitlines()
+        if not any(line.strip() for line in raw_lines):
+            return "<p>No summary content.</p>"
+
+        html_parts: list[str] = []
+        list_items: list[str] = []
+        list_type: str | None = None
+        paragraph: list[str] = []
+        code_block: list[str] | None = None
+
+        def flush_paragraph() -> None:
+            nonlocal paragraph
+            if paragraph:
+                content = " ".join(paragraph)
+                html_parts.append(f"<p>{HtmlReportRenderer._render_inline_markdown(content)}</p>")
+                paragraph = []
+
+        def flush_list() -> None:
+            nonlocal list_items, list_type
+            if list_items and list_type:
+                html_parts.append(f"<{list_type}>{''.join(list_items)}</{list_type}>")
+                list_items = []
+                list_type = None
+
+        for raw_line in raw_lines:
+            stripped = raw_line.strip()
+
+            if stripped.startswith("```"):
+                flush_paragraph()
+                flush_list()
+                if code_block is None:
+                    code_block = []
+                else:
+                    code = html.escape("\n".join(code_block))
+                    html_parts.append(f"<pre><code>{code}</code></pre>")
+                    code_block = None
+                continue
+
+            if code_block is not None:
+                code_block.append(raw_line)
+                continue
+
+            if not stripped:
+                flush_paragraph()
+                flush_list()
+                continue
+
+            heading = re.match(r"^(#{1,4})\s+(.+)$", stripped)
+            if heading:
+                flush_paragraph()
+                flush_list()
+                level = "h3" if len(heading.group(1)) <= 2 else "h4"
+                content = HtmlReportRenderer._render_inline_markdown(heading.group(2))
+                html_parts.append(f"<{level}>{content}</{level}>")
+                continue
+
+            unordered = re.match(r"^[-*]\s+(.+)$", stripped)
+            ordered = re.match(r"^\d+[.)]\s+(.+)$", stripped)
+            if unordered or ordered:
+                flush_paragraph()
+                current_type = "ul" if unordered else "ol"
+                if list_type and list_type != current_type:
+                    flush_list()
+                list_type = current_type
+                item = unordered.group(1) if unordered else ordered.group(1)
+                list_items.append(f"<li>{HtmlReportRenderer._render_inline_markdown(item)}</li>")
+                continue
+
+            flush_list()
+            paragraph.append(stripped)
+
+        if code_block is not None:
+            code = html.escape("\n".join(code_block))
+            html_parts.append(f"<pre><code>{code}</code></pre>")
+        flush_paragraph()
+        flush_list()
+        return "\n".join(html_parts)
+
+    @staticmethod
+    def _render_inline_markdown(text: str) -> str:
+        escaped = html.escape(text)
+
+        code_segments: list[str] = []
+
+        def stash_code(match: re.Match[str]) -> str:
+            code_segments.append(f"<code>{match.group(1)}</code>")
+            return f"@@CODE{len(code_segments) - 1}@@"
+
+        escaped = re.sub(r"`([^`]+)`", stash_code, escaped)
+        escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
+        escaped = re.sub(r"__([^_]+)__", r"<strong>\1</strong>", escaped)
+
+        for index, code in enumerate(code_segments):
+            escaped = escaped.replace(f"@@CODE{index}@@", code)
+        return escaped
 
     @staticmethod
     def _scaled_points(rows: list[Measurement], value_getter) -> str:

@@ -14,6 +14,7 @@ It is designed as an Operating Systems final project demo: instead of only discu
 - Measures syscall counts and top syscalls with `strace -c` when available.
 - Fits observed runtime against `O(1)`, `O(log n)`, `O(n)`, `O(n log n)`, and `O(n^2)`.
 - Produces a CLI table, JSON data, and an HTML report with SVG charts.
+- Optionally generates an OS-focused LLM summary with GitHub Copilot SDK.
 - Includes demo programs for linear search, bubble sort, Python sort, and I/O-heavy workloads.
 
 ## Project Structure
@@ -24,6 +25,7 @@ It is designed as an Operating Systems final project demo: instead of only discu
 - `algoscope/probes.py`: OS probes for process timing, memory usage, and `strace` syscall summaries.
 - `algoscope/complexity.py`: Big O model fitting.
 - `algoscope/report.py`: JSON and HTML report generation.
+- `algoscope/summary.py`: optional GitHub Copilot SDK summary generation focused on OS observability.
 - `algoscope/models.py`: shared typed data objects.
 - `examples/`: built-in workload demos.
 
@@ -40,6 +42,16 @@ reports/bubble_sort-report.html
 ```
 
 A committed sample report is available at `docs/bubble_sort-report.html`.
+
+To include an LLM-generated summary focused on OS monitoring:
+
+```bash
+uv run algoscope --case bubble_sort --llm-summary auto
+```
+
+`--llm-summary auto` records an unavailable note if Copilot authentication or networking is not available. Use `--llm-summary on` when you want the command to fail instead.
+
+The LLM summary sends the report measurements, probe commands, platform metadata, and program name to GitHub Copilot. Do not enable it for private data unless that disclosure is acceptable.
 
 ## Built-in Demos
 

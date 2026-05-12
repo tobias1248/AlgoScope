@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Linux-based runtime complexity and resource visualizer for students"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "github-copilot-sdk",
+]
 
 [project.scripts]
 algoscope = "algoscope.cli:main"

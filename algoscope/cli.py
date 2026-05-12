@@ -11,6 +11,7 @@ from algoscope.config import DEMO_CASES, ROOT
 from algoscope.models import Measurement
 from algoscope.probes import MeasurementCollector
 from algoscope.report import HtmlReportRenderer
+from algoscope.summary import LlmSummaryService
 from algoscope.utils import fmt_int, fmt_ms
 
 
@@ -26,8 +27,13 @@ class AlgoScopeApp:
         collector = MeasurementCollector(args.python, args.syscalls)
         rows, metadata = collector.collect(program, sizes, args.repeats)
         estimate, scores = self.estimator.estimate(rows)
-        report_path = self.renderer.render(program, rows, estimate, scores, metadata, args.output)
+        summary = LlmSummaryService(args.llm_summary, args.llm_timeout, args.llm_model).generate(
+            program, rows, estimate, scores, metadata
+        )
+        report_path = self.renderer.render(program, rows, estimate, scores, metadata, args.output, summary)
         self._print_table(program, rows, estimate, report_path)
+        if summary:
+            print(f"LLM summary: {summary.status} ({summary.provider})")
         return 0
 
     @staticmethod
@@ -84,6 +90,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--python", default=sys.executable, help="Python interpreter used for the target program.")
     parser.add_argument("--output", type=Path, default=ROOT / "reports", help="Output directory for the report.")
     parser.add_argument(
+        "--llm-summary",
+        choices=["off", "auto", "on"],
+        default="off",
+        help="Generate an OS-focused report summary with GitHub Copilot SDK. 'auto' records failures in the report; 'on' fails the run if LLM generation fails.",
+    )
+    parser.add_argument("--llm-model", default=None, help="Optional Copilot model id for LLM summary generation.")
+    parser.add_argument("--llm-timeout", type=float, default=45.0, help="Seconds to wait for LLM summary generation.")
+    parser.add_argument(
         "--syscalls",
         choices=["auto", "on", "off"],
         default="auto",
@@ -94,4 +108,3 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     return AlgoScopeApp().run(parse_args())
-
