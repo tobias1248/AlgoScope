@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AlgoScope Report - bubble_sort.py</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f7f4;
+      --panel: #ffffff;
+      --text: #1e2428;
+      --muted: #65717a;
+      --line: #d7ddd8;
+      --accent: #1c7c70;
+      --accent-2: #b54036;
+      --note: #fff6dc;
+      --note-border: #ead89a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    header, main { max-width: 1100px; margin: 0 auto; padding: 28px; }
+    header { padding-top: 42px; }
+    h1 { margin: 0 0 8px; font-size: 36px; letter-spacing: 0; }
+    h2 { margin: 0 0 14px; font-size: 20px; letter-spacing: 0; }
+    h3 { margin: 0 0 8px; font-size: 15px; letter-spacing: 0; }
+    p { color: var(--muted); margin: 0 0 14px; }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 12px;
+      margin-top: 22px;
+    }
+    .metric, section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .metric { padding: 16px; }
+    .metric span { display: block; color: var(--muted); font-size: 13px; }
+    .metric strong { display: block; margin-top: 4px; font-size: 24px; }
+    main { display: grid; gap: 18px; padding-top: 8px; }
+    section { padding: 18px; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: right; padding: 10px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th:first-child, td:first-child, th:last-child, td:last-child { text-align: left; }
+    th { color: var(--muted); font-weight: 650; }
+    svg { width: 100%; height: auto; display: block; }
+    .axis { stroke: #8b9690; stroke-width: 1; }
+    .series { fill: none; stroke: var(--accent); stroke-width: 3; }
+    circle { fill: var(--accent-2); }
+    text { fill: var(--muted); font-size: 12px; }
+    .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 18px; }
+    .note, .sticky { background: var(--note); border: 1px solid var(--note-border); border-radius: 8px; color: #6f5712; padding: 10px 12px; }
+    .os-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.6fr); gap: 16px; align-items: start; }
+    .sticky p { color: #6f5712; margin-bottom: 8px; }
+    details {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
+      background: #fbfcfb;
+    }
+    summary { cursor: pointer; font-weight: 700; }
+    .status { color: var(--muted); font-weight: 500; }
+    .command {
+      display: block;
+      margin: 10px 0;
+      padding: 10px;
+      border-radius: 6px;
+      overflow-x: auto;
+      background: #eef1ef;
+      color: #263033;
+      white-space: nowrap;
+    }
+    code { background: #eef1ef; border-radius: 4px; padding: 2px 5px; }
+    @media (max-width: 760px) {
+      header, main { padding-left: 16px; padding-right: 16px; }
+      .os-grid { grid-template-columns: 1fr; }
+      th, td { font-size: 13px; padding: 8px 6px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AlgoScope</h1>
+    <p>A Linux-based Runtime Complexity and Resource Visualizer for Students.</p>
+    <div class="summary">
+      <div class="metric"><span>Program</span><strong>bubble_sort.py</strong></div>
+      <div class="metric"><span>Estimated Big O</span><strong>O(log n)</strong></div>
+      <div class="metric"><span>Input Range</span><strong>10 - 20</strong></div>
+      <div class="metric"><span>Time Tool</span><strong>wait4</strong></div>
+    </div>
+  </header>
+  <main>
+    <p class="note">strace is unavailable on this machine, so syscall data is marked n/a. Run on Linux with strace installed to enable this OS-level metric.</p>
+    <section>
+      <h2>Measurements</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Input size</th><th>Wall ms</th><th>User ms</th><th>System ms</th><th>Memory KB</th><th>Syscalls</th><th>Top syscalls</th>
+          </tr>
+        </thead>
+        <tbody>
+        <tr>
+          <td>10</td>
+          <td>17.37</td>
+          <td>11.05</td>
+          <td>3.63</td>
+          <td>14,752</td>
+          <td>n/a</td>
+          <td>n/a</td>
+        </tr>
+        
+
+        <tr>
+          <td>20</td>
+          <td>15.80</td>
+          <td>10.77</td>
+          <td>3.54</td>
+          <td>14,784</td>
+          <td>n/a</td>
+          <td>n/a</td>
+        </tr>
+        </tbody>
+      </table>
+    </section>
+    <div class="charts">
+      <section>
+        <h2>Input Size vs Execution Time</h2>
+        
+    <svg viewBox="0 0 760 260" role="img">
+      <line class="axis" x1="58" y1="24" x2="58" y2="216"></line>
+      <line class="axis" x1="58" y1="216" x2="736" y2="216"></line>
+      <polyline class="series" points="58.0,24.0 736.0,41.3"></polyline>
+      <circle cx="58.0" cy="24.0" r="4"><title>n=10, value=17.367291991831735</title></circle>
+<circle cx="736.0" cy="41.3" r="4"><title>n=20, value=15.804208000190556</title></circle>
+      <text x="58.0" y="244" text-anchor="middle">10</text>
+<text x="736.0" y="244" text-anchor="middle">20</text>
+    </svg>
+    
+      </section>
+      <section>
+        <h2>Input Size vs Memory Usage</h2>
+        
+    <svg viewBox="0 0 760 260" role="img">
+      <line class="axis" x1="58" y1="24" x2="58" y2="216"></line>
+      <line class="axis" x1="58" y1="216" x2="736" y2="216"></line>
+      <polyline class="series" points="58.0,24.4 736.0,24.0"></polyline>
+      <circle cx="58.0" cy="24.4" r="4"><title>n=10, value=14752</title></circle>
+<circle cx="736.0" cy="24.0" r="4"><title>n=20, value=14784</title></circle>
+      <text x="58.0" y="244" text-anchor="middle">10</text>
+<text x="736.0" y="244" text-anchor="middle">20</text>
+    </svg>
+    
+      </section>
+      <section>
+        <h2>Input Size vs Syscall Count</h2>
+        <p class="note">No data available for this chart.</p>
+      </section>
+    </div>
+    <section>
+      <h2>Big O Model Fit</h2>
+      <p>This estimates the closest observed growth pattern, not a formal proof of time complexity.</p>
+      <table>
+        <thead><tr><th>Model</th><th>Normalized RMSE</th><th>RMSE</th></tr></thead>
+        <tbody>
+        <tr>
+          <td>O(log n)</td>
+          <td>0.0000</td>
+          <td>0.0000</td>
+        </tr>
+        
+
+        <tr>
+          <td>O(n)</td>
+          <td>0.0000</td>
+          <td>0.0000</td>
+        </tr>
+        
+
+        <tr>
+          <td>O(n^2)</td>
+          <td>0.0000</td>
+          <td>0.0000</td>
+        </tr>
+        
+
+        <tr>
+          <td>O(n log n)</td>
+          <td>0.0000</td>
+          <td>0.0000</td>
+        </tr>
+        
+
+        <tr>
+          <td>O(1)</td>
+          <td>0.0471</td>
+          <td>0.7815</td>
+        </tr>
+        </tbody>
+      </table>
+    </section>
+    <section>
+      <h2>OS Observability Context</h2>
+      <div class="os-grid">
+        <div>
+          <p>Each input size launches the target as a separate process. AlgoScope records wall time, user CPU time, system CPU time, maximum resident set size, and syscall summaries when Linux <code>strace -c</code> is available.</p>
+          <h3>Shell Commands & OS Probes</h3>
+          
+          <details>
+            <summary>Target process <span class="status">(used)</span></summary>
+            <code class="command">/opt/homebrew/opt/python@3.14/bin/python3.14 /Users/tobias/Operating_System/AlgoScope/examples/bubble_sort.py &lt;n&gt;</code>
+            <p><strong>Purpose:</strong> Launches the student&#x27;s program once per input size.</p>
+            <p><strong>OS concept:</strong> Process creation</p>
+          </details>
+          
+
+          <details>
+            <summary>wait4 fallback <span class="status">(used fallback)</span></summary>
+            <code class="command">os.wait4(child_pid, 0)</code>
+            <p><strong>Purpose:</strong> Reads kernel resource usage for the child process when /usr/bin/time is unavailable or restricted.</p>
+            <p><strong>OS concept:</strong> Process lifecycle and resource accounting</p>
+          </details>
+          
+
+          <details>
+            <summary>strace syscall summary <span class="status">(disabled)</span></summary>
+            <code class="command">strace -c /opt/homebrew/opt/python@3.14/bin/python3.14 /Users/tobias/Operating_System/AlgoScope/examples/bubble_sort.py &lt;n&gt;</code>
+            <p><strong>Purpose:</strong> Counts syscall activity such as read, write, openat, mmap, and brk.</p>
+            <p><strong>OS concept:</strong> System calls and I/O overhead</p>
+          </details>
+          
+        </div>
+        <aside class="sticky">
+          <h3>Student Notes</h3>
+          <p><strong>Process:</strong> every row starts a new child process for the target program.</p>
+          <p><strong>CPU time:</strong> user time is code running in user mode; system time is kernel work on behalf of the process.</p>
+          <p><strong>Memory:</strong> RSS is the peak resident memory observed for that process.</p>
+          <p><strong>Syscalls:</strong> high read/write/openat counts usually indicate I/O overhead rather than pure algorithm cost.</p>
+        </aside>
+      </div>
+      <p>Raw data is saved next to this report as <code>bubble_sort-data.json</code>.</p>
+    </section>
+  </main>
+</body>
+</html>

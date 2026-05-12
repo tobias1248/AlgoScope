@@ -1,0 +1,90 @@
+{
+  "program": "/Users/tobias/Operating_System/AlgoScope/examples/bubble_sort.py",
+  "estimated_complexity": "O(log n)",
+  "metadata": {
+    "platform": "macOS-26.3.1-arm64-arm-64bit-Mach-O",
+    "python": "/opt/homebrew/opt/python@3.14/bin/python3.14",
+    "time_tool": "wait4",
+    "strace": "unavailable",
+    "probe_commands": [
+      {
+        "title": "Target process",
+        "command": "/opt/homebrew/opt/python@3.14/bin/python3.14 /Users/tobias/Operating_System/AlgoScope/examples/bubble_sort.py <n>",
+        "purpose": "Launches the student's program once per input size.",
+        "os_concept": "Process creation",
+        "status": "used"
+      },
+      {
+        "title": "wait4 fallback",
+        "command": "os.wait4(child_pid, 0)",
+        "purpose": "Reads kernel resource usage for the child process when /usr/bin/time is unavailable or restricted.",
+        "os_concept": "Process lifecycle and resource accounting",
+        "status": "used fallback"
+      },
+      {
+        "title": "strace syscall summary",
+        "command": "strace -c /opt/homebrew/opt/python@3.14/bin/python3.14 /Users/tobias/Operating_System/AlgoScope/examples/bubble_sort.py <n>",
+        "purpose": "Counts syscall activity such as read, write, openat, mmap, and brk.",
+        "os_concept": "System calls and I/O overhead",
+        "status": "disabled"
+      }
+    ]
+  },
+  "measurements": [
+    {
+      "size": 10,
+      "wall_ms": 17.367291991831735,
+      "user_ms": 11.054,
+      "system_ms": 3.6339999999999995,
+      "memory_kb": 14752,
+      "syscall_count": null,
+      "top_syscalls": []
+    },
+    {
+      "size": 20,
+      "wall_ms": 15.804208000190556,
+      "user_ms": 10.774,
+      "system_ms": 3.542,
+      "memory_kb": 14784,
+      "syscall_count": null,
+      "top_syscalls": []
+    }
+  ],
+  "model_scores": [
+    {
+      "name": "O(log n)",
+      "a": -2.2550535232336553,
+      "b": 22.55974461833325,
+      "rmse": 0.0,
+      "normalized_rmse": 0.0
+    },
+    {
+      "name": "O(n)",
+      "a": -0.15630839916411787,
+      "b": 18.930375983472914,
+      "rmse": 0.0,
+      "normalized_rmse": 0.0
+    },
+    {
+      "name": "O(n^2)",
+      "a": -0.005210279972137262,
+      "b": 17.88831998904546,
+      "rmse": 0.0,
+      "normalized_rmse": 0.0
+    },
+    {
+      "name": "O(n log n)",
+      "a": -0.04237286718323058,
+      "b": 18.342963315066967,
+      "rmse": 1.2560739669470201e-15,
+      "normalized_rmse": 7.573211746524002e-17
+    },
+    {
+      "name": "O(1)",
+      "a": 0.0,
+      "b": 16.585749996011145,
+      "rmse": 0.7815419958205894,
+      "normalized_rmse": 0.0471212936411407
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+"""AlgoScope package."""
+
