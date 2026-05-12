@@ -116,6 +116,9 @@ class TimeProbe:
             if "Maximum resident set size" in result.stderr:
                 return "gnu"
 
+            if platform.system() == "Darwin" and hasattr(os, "wait4"):
+                return "wait4"
+
             probe = [str(time_bin), "-l", sys.executable, "-c", "pass"]
             result = subprocess.run(probe, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
             if "maximum resident set size" in result.stderr.lower():

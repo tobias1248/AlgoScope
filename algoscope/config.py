@@ -26,3 +26,30 @@ DEMO_CASES = {
     },
 }
 
+COMPARISON_CASES = {
+    "same-on": {
+        "title": "Same O(n), Different OS Behavior",
+        "slug": "same-on-os-behavior",
+        "description": (
+            "Both programs perform O(n) work, but one is CPU-bound while the other is I/O-bound. "
+            "The comparison highlights user time, system time, memory usage, syscall count, and top syscalls."
+        ),
+        "sizes": [50, 100, 200, 400],
+        "targets": [
+            {
+                "key": "cpu_loop",
+                "label": "cpu_loop.py",
+                "program": ROOT / "examples" / "cpu_loop.py",
+                "expected_complexity": "O(n)",
+                "interpretation": "CPU-bound: user-space arithmetic should dominate, with relatively low syscall activity.",
+            },
+            {
+                "key": "file_writer",
+                "label": "file_writer.py",
+                "program": ROOT / "examples" / "file_writer.py",
+                "expected_complexity": "O(n)",
+                "interpretation": "I/O-bound: file creation and writes should increase system time and syscall activity.",
+            },
+        ],
+    }
+}

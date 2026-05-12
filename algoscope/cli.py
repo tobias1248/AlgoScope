@@ -6,9 +6,10 @@ import argparse
 import sys
 from pathlib import Path
 
+from algoscope.comparison import ComparisonRunner
 from algoscope.complexity import ComplexityEstimator
-from algoscope.config import DEMO_CASES, ROOT
-from algoscope.models import Measurement
+from algoscope.config import COMPARISON_CASES, DEMO_CASES, ROOT
+from algoscope.models import ComparisonReport, Measurement
 from algoscope.probes import MeasurementCollector
 from algoscope.report import HtmlReportRenderer
 from algoscope.summary import LlmSummaryService
@@ -23,6 +24,9 @@ class AlgoScopeApp:
         self.renderer = HtmlReportRenderer()
 
     def run(self, args: argparse.Namespace) -> int:
+        if args.comparison:
+            return self._run_comparison(args)
+
         program, sizes = self._resolve_target(args)
         collector = MeasurementCollector(args.python, args.syscalls)
         rows, metadata = collector.collect(program, sizes, args.repeats)
@@ -34,6 +38,12 @@ class AlgoScopeApp:
         self._print_table(program, rows, estimate, report_path)
         if summary:
             print(f"LLM summary: {summary.status} ({summary.provider})")
+        return 0
+
+    def _run_comparison(self, args: argparse.Namespace) -> int:
+        comparison = ComparisonRunner(args.python, args.syscalls).run(args.comparison, args.sizes, args.repeats)
+        report_path = self.renderer.render_comparison(comparison, args.output)
+        self._print_comparison_table(comparison, report_path)
         return 0
 
     @staticmethod
@@ -77,6 +87,25 @@ class AlgoScopeApp:
         print(f"Estimated complexity: {estimate}")
         print(f"HTML report: {report_path}")
 
+    @staticmethod
+    def _print_comparison_table(comparison: ComparisonReport, report_path: Path) -> None:
+        print(f"Comparison: {comparison.title}")
+        print()
+        print(
+            f"{'Program':>16} | {'Big O':>6} | {'User(ms)':>10} | "
+            f"{'Sys(ms)':>9} | {'Memory(KB)':>11} | {'Syscalls':>9}"
+        )
+        print("-" * 76)
+        for result in comparison.results:
+            row = result.representative
+            print(
+                f"{result.target.label:>16} | {result.target.expected_complexity:>6} | "
+                f"{fmt_ms(row.user_ms):>10} | {fmt_ms(row.system_ms):>9} | "
+                f"{fmt_int(row.memory_kb):>11} | {fmt_int(row.syscall_count):>9}"
+            )
+        print()
+        print(f"HTML report: {report_path}")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -85,6 +114,7 @@ def parse_args() -> argparse.Namespace:
     target = parser.add_mutually_exclusive_group()
     target.add_argument("--program", type=Path, help="Target Python program. It must accept input size as argv[1].")
     target.add_argument("--case", choices=sorted(DEMO_CASES), help="Built-in demo case.")
+    target.add_argument("--comparison", choices=sorted(COMPARISON_CASES), help="Built-in comparison report.")
     parser.add_argument("--sizes", type=int, nargs="+", help="Input sizes to test.")
     parser.add_argument("--repeats", type=int, default=3, help="Number of timing runs per input size.")
     parser.add_argument("--python", default=sys.executable, help="Python interpreter used for the target program.")

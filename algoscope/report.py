@@ -9,7 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from algoscope.models import ComplexityScore, Measurement
+from algoscope.models import ComparisonReport, ComparisonTargetResult, ComplexityScore, Measurement
 from algoscope.summary import ReportSummary
 from algoscope.utils import fmt_int, fmt_ms
 
@@ -39,6 +39,18 @@ class HtmlReportRenderer:
         )
         return report_path
 
+    def render_comparison(self, comparison: ComparisonReport, output_dir: Path) -> Path:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        report_path = output_dir / f"{comparison.slug}-report.html"
+        json_path = output_dir / f"{comparison.slug}-data.json"
+
+        json_path.write_text(
+            json.dumps(self._comparison_to_json(comparison), indent=2),
+            encoding="utf-8",
+        )
+        report_path.write_text(self._render_comparison_html(comparison, json_path), encoding="utf-8")
+        return report_path
+
     @staticmethod
     def _write_json(
         json_path: Path,
@@ -58,6 +70,29 @@ class HtmlReportRenderer:
             "llm_summary": asdict(summary) if summary else None,
         }
         json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def _comparison_to_json(comparison: ComparisonReport) -> dict[str, Any]:
+        return {
+            "title": comparison.title,
+            "slug": comparison.slug,
+            "description": comparison.description,
+            "sizes": comparison.sizes,
+            "results": [
+                {
+                    "target": {
+                        "key": result.target.key,
+                        "label": result.target.label,
+                        "program": str(result.target.program),
+                        "expected_complexity": result.target.expected_complexity,
+                        "interpretation": result.target.interpretation,
+                    },
+                    "metadata": result.metadata,
+                    "measurements": [asdict(row) for row in result.measurements],
+                }
+                for result in comparison.results
+            ],
+        }
 
     def _render_html(
         self,
@@ -258,6 +293,214 @@ class HtmlReportRenderer:
 </body>
 </html>
 """
+
+    def _render_comparison_html(self, comparison: ComparisonReport, json_path: Path) -> str:
+        summary_rows = self._render_comparison_summary_rows(comparison.results)
+        detail_rows = self._render_comparison_detail_rows(comparison.results)
+        probe_blocks = self._render_comparison_probe_blocks(comparison.results)
+        first_size = comparison.sizes[0]
+        last_size = comparison.sizes[-1]
+
+        return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AlgoScope Comparison - {html.escape(comparison.title)}</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --bg: #f7f7f4;
+      --panel: #ffffff;
+      --text: #1e2428;
+      --muted: #65717a;
+      --line: #d7ddd8;
+      --accent: #1c7c70;
+      --accent-2: #b54036;
+      --note: #fff6dc;
+      --note-border: #ead89a;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }}
+    header, main {{ max-width: 1120px; margin: 0 auto; padding: 28px; }}
+    header {{ padding-top: 42px; }}
+    h1 {{ margin: 0 0 8px; font-size: 36px; letter-spacing: 0; }}
+    h2 {{ margin: 0 0 14px; font-size: 20px; letter-spacing: 0; }}
+    h3 {{ margin: 0 0 8px; font-size: 15px; letter-spacing: 0; }}
+    p {{ color: var(--muted); margin: 0 0 14px; }}
+    .summary {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 12px;
+      margin-top: 22px;
+    }}
+    .metric, section {{
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }}
+    .metric {{ padding: 16px; }}
+    .metric span {{ display: block; color: var(--muted); font-size: 13px; }}
+    .metric strong {{ display: block; margin-top: 4px; font-size: 23px; }}
+    main {{ display: grid; gap: 18px; padding-top: 8px; }}
+    section {{ padding: 18px; overflow: hidden; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
+    th, td {{ text-align: right; padding: 10px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }}
+    th:first-child, td:first-child, th:last-child, td:last-child {{ text-align: left; }}
+    th {{ color: var(--muted); font-weight: 650; }}
+    .note {{ background: var(--note); border: 1px solid var(--note-border); border-radius: 8px; color: #6f5712; padding: 10px 12px; }}
+    .comparison-lede {{
+      border-left: 4px solid var(--accent);
+      padding-left: 14px;
+      color: var(--text);
+    }}
+    .program-name {{ font-weight: 750; color: var(--text); }}
+    .probe-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }}
+    details {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
+      background: #fbfcfb;
+    }}
+    summary {{ cursor: pointer; font-weight: 700; }}
+    .status {{ color: var(--muted); font-weight: 500; }}
+    .command {{
+      display: block;
+      margin: 10px 0;
+      padding: 10px;
+      border-radius: 6px;
+      overflow-x: auto;
+      background: #eef1ef;
+      color: #263033;
+      white-space: nowrap;
+    }}
+    code {{ background: #eef1ef; border-radius: 4px; padding: 2px 5px; }}
+    @media (max-width: 760px) {{
+      header, main {{ padding-left: 16px; padding-right: 16px; }}
+      th, td {{ font-size: 13px; padding: 8px 6px; }}
+    }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>{html.escape(comparison.title)}</h1>
+    <p>Bridging Big O theory and real Linux runtime behavior.</p>
+    <div class="summary">
+      <div class="metric"><span>Expected Big O</span><strong>O(n)</strong></div>
+      <div class="metric"><span>Programs</span><strong>{len(comparison.results)}</strong></div>
+      <div class="metric"><span>Input Range</span><strong>{first_size:,} - {last_size:,}</strong></div>
+      <div class="metric"><span>Focus</span><strong>CPU vs I/O</strong></div>
+    </div>
+  </header>
+  <main>
+    <section>
+      <h2>Same O(n), Different OS Behavior</h2>
+      <p class="comparison-lede">{html.escape(comparison.description)}</p>
+      <p>Both workloads scale linearly with input size, but the OS metrics should tell different stories: CPU-bound work spends more time in user-space computation, while I/O-bound work shifts more activity into kernel services and file-related syscalls.</p>
+    </section>
+    <section>
+      <h2>Representative Comparison</h2>
+      <p>Values below use the largest tested input size, making the CPU-bound and I/O-bound behavior easiest to compare.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Program</th><th>Big O</th><th>User ms</th><th>System ms</th><th>Memory KB</th><th>Syscalls</th><th>Top syscalls</th><th>Interpretation</th>
+          </tr>
+        </thead>
+        <tbody>{summary_rows}</tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Measurements by Input Size</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Program</th><th>Input size</th><th>Wall ms</th><th>User ms</th><th>System ms</th><th>Memory KB</th><th>Syscalls</th><th>Top syscalls</th>
+          </tr>
+        </thead>
+        <tbody>{detail_rows}</tbody>
+      </table>
+    </section>
+    <section>
+      <h2>OS Probes Used</h2>
+      <div class="probe-grid">
+        {probe_blocks}
+      </div>
+      <p>Raw data is saved next to this report as <code>{html.escape(json_path.name)}</code>.</p>
+    </section>
+  </main>
+</body>
+</html>
+"""
+
+    @staticmethod
+    def _render_comparison_summary_rows(results: list[ComparisonTargetResult]) -> str:
+        rows = []
+        for result in results:
+            row = result.representative
+            rows.append(
+                f"""
+        <tr>
+          <td><span class="program-name">{html.escape(result.target.label)}</span></td>
+          <td>{html.escape(result.target.expected_complexity)}</td>
+          <td>{fmt_ms(row.user_ms)}</td>
+          <td>{fmt_ms(row.system_ms)}</td>
+          <td>{fmt_int(row.memory_kb)}</td>
+          <td>{fmt_int(row.syscall_count)}</td>
+          <td>{html.escape(HtmlReportRenderer._format_top_syscalls(row.top_syscalls))}</td>
+          <td>{html.escape(result.target.interpretation)}</td>
+        </tr>
+        """
+            )
+        return "\n".join(rows)
+
+    @staticmethod
+    def _render_comparison_detail_rows(results: list[ComparisonTargetResult]) -> str:
+        rows = []
+        for result in results:
+            for row in result.measurements:
+                rows.append(
+                    f"""
+        <tr>
+          <td><span class="program-name">{html.escape(result.target.label)}</span></td>
+          <td>{row.size:,}</td>
+          <td>{fmt_ms(row.wall_ms)}</td>
+          <td>{fmt_ms(row.user_ms)}</td>
+          <td>{fmt_ms(row.system_ms)}</td>
+          <td>{fmt_int(row.memory_kb)}</td>
+          <td>{fmt_int(row.syscall_count)}</td>
+          <td>{html.escape(HtmlReportRenderer._format_top_syscalls(row.top_syscalls))}</td>
+        </tr>
+        """
+                )
+        return "\n".join(rows)
+
+    @staticmethod
+    def _render_comparison_probe_blocks(results: list[ComparisonTargetResult]) -> str:
+        blocks = []
+        for result in results:
+            blocks.append(
+                f"""
+        <div>
+          <h3>{html.escape(result.target.label)}</h3>
+          {HtmlReportRenderer._render_probe_commands(result.metadata)}
+        </div>
+        """
+            )
+        return "\n".join(blocks)
+
+    @staticmethod
+    def _format_top_syscalls(top_syscalls: list[tuple[str, int]]) -> str:
+        if not top_syscalls:
+            return "n/a"
+        return ", ".join(f"{name}: {calls}" for name, calls in top_syscalls)
 
     @staticmethod
     def _render_measurement_rows(rows: list[Measurement]) -> str:

@@ -16,12 +16,14 @@ It is designed as an Operating Systems final project demo: instead of only discu
 - Produces a CLI table, JSON data, and an HTML report with SVG charts.
 - Optionally generates an OS-focused LLM summary with GitHub Copilot SDK.
 - Includes demo programs for linear search, bubble sort, Python sort, and I/O-heavy workloads.
+- Includes a comparison report showing two O(n) programs with different OS behavior.
 
 ## Project Structure
 
 - `analyzer.py`: compatibility CLI entrypoint.
 - `main.py`: uv-friendly CLI entrypoint.
 - `algoscope/cli.py`: argument parsing and application workflow.
+- `algoscope/comparison.py`: built-in comparison workflows.
 - `algoscope/probes.py`: OS probes for process timing, memory usage, and `strace` syscall summaries.
 - `algoscope/complexity.py`: Big O model fitting.
 - `algoscope/report.py`: JSON and HTML report generation.
@@ -67,6 +69,21 @@ You can override input sizes:
 ```bash
 python3 analyzer.py --case bubble_sort --sizes 100 300 600 1000
 ```
+
+## OS Behavior Comparison
+
+Generate the pitch-focused comparison report:
+
+```bash
+uv run algoscope --comparison same-on
+```
+
+This runs two O(n) programs:
+
+- `examples/cpu_loop.py`: CPU-bound user-space arithmetic.
+- `examples/file_writer.py`: I/O-bound file creation and writes.
+
+The report compares user time, system time, memory usage, syscall count, and top syscalls to show that programs with the same Big O can have very different Linux runtime behavior.
 
 ## Analyze Your Own Python Program
 
