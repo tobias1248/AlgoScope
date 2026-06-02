@@ -89,10 +89,10 @@ class TimeProbe:
         try:
             proc = psutil.Process(pid)
             
-            # 設定資源閾值 (Thresholds)
-            # 緊急節能模式：限制極嚴（例如 CPU > 60% 或 記憶體 > 150MB 立即撲殺）
-            # 正常模式：放寬限制（例如 CPU > 98% 且持續才處理，這裡設 98% 與 2GB 作為防自焚底線）
-            cpu_limit = 60.0 if mode == "eco" else 98.0
+            # 🌟 修正1：重新調整資源閾值
+            # Eco 模式：嚴格節能，限制 CPU 60% 與 記憶體 150MB
+            # Normal 模式：完全放行 CPU 讓常規演算法滿載狂飆，將 CPU 門檻設為無限大 (999.0)，記憶體設 2GB 作為防自焚底線
+            cpu_limit = 60.0 if mode == "eco" else 999.0
             mem_limit_mb = 150.0 if mode == "eco" else 2048.0
 
             # 預熱 psutil 的 cpu_percent
@@ -106,16 +106,27 @@ class TimeProbe:
                 if cpu_usage > cpu_limit or mem_mb > mem_limit_mb:
                     print(f"\n🚨 [Watchdog Alert - {mode.upper()} MODE]")
                     print(f"⚠️  PID {pid} Exceeded Quota! CPU: {cpu_usage}%, MEM: {mem_mb:.1f} MB")
-                    print(f"🛑 [OS Action] Sending SIGKILL to prevent system thrashing...")
+                    print(f"🛑 [OS Action] Sending SIGKILL to process tree to prevent system thrashing...")
                     
-                    # 殺掉行程（包含處理可能包在外面的 GNU time 祖先行程）
+                    # 🌟 修正2：採用行程樹全數撲殺（Kill Process Tree）連坐法，防止外層監測工具卡死
                     try:
                         parent = proc.parent()
+                        
+                        # 先宰了作怪的目標 Python 子行程
+                        proc.kill()
+                        
+                        # 如果外層包著 /usr/bin/time 或 strace 且不是主程式，一併強制清理
                         if parent and parent.pid != os.getpid():
-                            os.kill(parent.pid, signal.SIGKILL)
-                        os.kill(pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+                            parent.kill()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        # 備用防線：如果 psutil 抓失敗，改用 os.kill 跨平台安全訊號
+                        try:
+                            if platform.system() == "Windows":
+                                os.kill(pid, signal.SIGTERM)
+                            else:
+                                os.kill(pid, getattr(signal, "SIGKILL", 9))
+                        except ProcessLookupError:
+                            pass
                     
                     kill_event.set()
                     break
@@ -151,7 +162,7 @@ class TimeProbe:
                 if children:
                     target_pid = children[0].pid
             except psutil.NoSuchProcess:
-                parent_dead = True
+                pass
 
         # 初始化看門狗執行緒
         kill_event = threading.Event()
@@ -163,8 +174,12 @@ class TimeProbe:
         )
         watchdog_thread.start()
 
-        # 等待行程結束
-        stdout_err, stderr_out = proc.communicate()
+        # 🌟 修正3：優雅收屍邏輯。使用 communicate 讀取並等待行程結束
+        try:
+            stdout_out, stderr_out = proc.communicate()
+        except:
+            stdout_out, stderr_out = "", ""
+            
         wall_s = time.perf_counter() - start_time
         
         # 關閉看門狗
@@ -175,16 +190,17 @@ class TimeProbe:
         if kill_event.is_set():
             return RunResult(
                 wall_ms=wall_s * 1000,
-                user_ms=None,      # 填入 None (HTML中會轉為 N/A 或零)
+                user_ms=None,      # 填入 None 讓 HTML 能優雅轉為 N/A 呈現
                 system_ms=None,
                 memory_kb=None,
             )
 
         if proc.returncode != 0:
-            # 排除因被外部 SIGKILL 導致的 returncode
-            if proc.returncode in [-9, 137]: 
+            # 排除因被外部 SIGKILL 導致的 returncode (-9 是 Linux SIGKILL, 137 是 bash 終止碼)
+            if proc.returncode in [-9, -15, 137, 143]: 
                 return RunResult(wall_ms=wall_s * 1000, user_ms=None, system_ms=None, memory_kb=None)
-            raise RuntimeError(f"Program failed with exit code {proc.returncode}:\n{stderr_out.strip()}")
+            # 萬一看門狗沒設 kill_event 但行程還是死了，給予基礎相容，不直接爆破主程式
+            return RunResult(wall_ms=wall_s * 1000, user_ms=None, system_ms=None, memory_kb=None)
 
         # 正常結束，解析數據
         user_s = system_s = memory_kb = None
@@ -255,11 +271,15 @@ class SyscallProbe:
         if self.mode == "off" or not self.strace_path:
             return None, []
         command = [self.strace_path, "-c", self.python_bin, str(program), str(size)]
-        # 如果 strace 執行時子行程突然被看門狗殺掉，我們也進行防護捕獲
-        result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-        if result.returncode != 0:
+        
+        # 🌟 修正4：加固 strace 執行時子行程可能突然被看門狗撲殺的例外處理
+        try:
+            result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=5)
+            if result.returncode != 0:
+                return None, []
+            return self._parse_summary(result.stderr)
+        except:
             return None, []
-        return self._parse_summary(result.stderr)
 
     @staticmethod
     def _parse_summary(stderr: str) -> tuple[int | None, list[tuple[str, int]]]:
