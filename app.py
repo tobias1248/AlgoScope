@@ -3,6 +3,8 @@ import subprocess
 import psutil
 import time
 import os
+import glob 
+import signal
 import streamlit.components.v1 as components
 from pathlib import Path
 
@@ -50,10 +52,12 @@ st.markdown("---")
 st.sidebar.header("Control Panel")
 
 # Target Workload Selection
-available_programs = {
-    "Infinite Loop Workload (monster.py)": "examples/monster.py",
-    "Bubble Sort Algorithm (bubble_sort.py)": "examples/bubble_sort.py"
-}
+base_dir = os.path.dirname(os.path.abspath(__file__))
+search_path = os.path.join(base_dir, "examples", "*.py")
+
+program_files = glob.glob(search_path)
+available_programs = {os.path.basename(f): f for f in program_files}
+
 selected_label = st.sidebar.selectbox("Target Workload", list(available_programs.keys()))
 program_path = available_programs[selected_label]
 
@@ -71,6 +75,36 @@ else:
 # Threshold Tuning
 cpu_threshold = st.sidebar.slider("CPU Quota Threshold (%)", 10, 100, default_cpu)
 repeats = st.sidebar.slider("Sample Runs (Repeats)", 1, 5, 3)
+
+enable_sentinel = st.sidebar.checkbox("Enable System-wide Sentinel")
+
+if enable_sentinel:
+    # 這裡啟動背景進程
+    # 技巧：使用 subprocess 啟動，並記錄 PID，這樣網頁關掉時可以順便砍掉 Sentinel
+    if "sentinel_pid" not in st.session_state:
+        p = subprocess.Popen(["python3", "sentinel.py"])
+        st.session_state.sentinel_pid = p.pid
+        st.sidebar.success(f"Sentinel running (PID: {p.pid})")
+else:
+    if "sentinel_pid" in st.session_state:
+        os.kill(st.session_state.sentinel_pid, signal.SIGKILL)
+        del st.session_state.sentinel_pid
+        st.sidebar.warning("Sentinel disabled.")
+
+st.subheader("Live Threat Map (Real-time Audit)")
+
+# 讀取威脅計數
+if not os.path.exists("threat_log.txt"): open("threat_log.txt", "w").close()
+with open("threat_log.txt", "r") as f: threat_count = len(f.readlines())
+
+col1, col2, col3 = st.columns(3)
+col1.metric("CPU Load", f"{psutil.cpu_percent()}%")
+col2.metric("Threats Blocked", threat_count)
+col3.metric("System Status", "🛡️ Running" if "sentinel_pid" in st.session_state else "💤 IDLE")
+
+# CPU 波動圖
+cpu_history = [psutil.cpu_percent(interval=0.1) for _ in range(30)]
+st.line_chart(cpu_history)
 
 # ==========================================
 # 3. Execution & Process Lifecycle Logging
