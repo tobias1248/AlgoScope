@@ -24,6 +24,10 @@ DEMO_CASES = {
         "program": ROOT / "examples" / "io_heavy.py",
         "sizes": [100, 250, 500, 1_000, 2_000],
     },
+    "monster": {
+        "program": ROOT / "examples" / "monster.py",
+        "sizes": [100, 250, 500],
+    },
 }
 
 COMPARISON_CASES = {

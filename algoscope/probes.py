@@ -1,4 +1,4 @@
-"""OS-level runtime, memory, and syscall probes."""
+"""OS-level runtime, memory, and syscall probes with an Active Auditing Watchdog."""
 
 from __future__ import annotations
 
@@ -9,14 +9,19 @@ import statistics
 import subprocess
 import sys
 import time
+import threading
+import signal
 from pathlib import Path
+
+# 注意：請確保環境中已安裝 psutil (pip install psutil)
+import psutil
 
 from algoscope.models import Measurement, ProbeCommand, RunResult
 from algoscope.utils import optional_median_float, optional_median_int, safe_float, safe_int
 
 
 class TimeProbe:
-    """Measure target process wall time, CPU time, and peak RSS."""
+    """Measure target process wall time, CPU time, and peak RSS with Watchdog support."""
 
     def __init__(self, python_bin: str) -> None:
         self.python_bin = python_bin
@@ -79,27 +84,112 @@ class TimeProbe:
             )
         return notes
 
-    def run(self, program: Path, size: int) -> RunResult:
+    def _watchdog_worker(self, pid: int, mode: str, kill_event: threading.Event, stop_event: threading.Event):
+        """背景看門狗執行緒：每 0.05 秒檢查子行程狀態，爆表就主動 Kill 掉"""
+        try:
+            proc = psutil.Process(pid)
+            
+            # 設定資源閾值 (Thresholds)
+            # 緊急節能模式：限制極嚴（例如 CPU > 60% 或 記憶體 > 150MB 立即撲殺）
+            # 正常模式：放寬限制（例如 CPU > 98% 且持續才處理，這裡設 98% 與 2GB 作為防自焚底線）
+            cpu_limit = 60.0 if mode == "eco" else 98.0
+            mem_limit_mb = 150.0 if mode == "eco" else 2048.0
+
+            # 預熱 psutil 的 cpu_percent
+            proc.cpu_percent(interval=None)
+            
+            while not stop_event.is_set() and proc.is_running():
+                # 取得即時資源狀態
+                cpu_usage = proc.cpu_percent(interval=None)
+                mem_mb = proc.memory_info().rss / (1024 * 1024)
+
+                if cpu_usage > cpu_limit or mem_mb > mem_limit_mb:
+                    print(f"\n🚨 [Watchdog Alert - {mode.upper()} MODE]")
+                    print(f"⚠️  PID {pid} Exceeded Quota! CPU: {cpu_usage}%, MEM: {mem_mb:.1f} MB")
+                    print(f"🛑 [OS Action] Sending SIGKILL to prevent system thrashing...")
+                    
+                    # 殺掉行程（包含處理可能包在外面的 GNU time 祖先行程）
+                    try:
+                        parent = proc.parent()
+                        if parent and parent.pid != os.getpid():
+                            os.kill(parent.pid, signal.SIGKILL)
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    
+                    kill_event.set()
+                    break
+                time.sleep(0.05)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    def run(self, program: Path, size: int, mode: str = "normal") -> RunResult:
         command = [self.python_bin, str(program), str(size)]
 
-        if self.style == "wait4":
-            return self._run_with_wait4(command)
+        # 如果是在 Windows 或不支援 time tool 的環境使用 wait4/Popen 核心
+        if self.style == "wait4" or self.style is None:
+            return self._run_with_watchdog_core(command, mode)
 
-        timed_command = command
-        if self.style:
-            flag = "-v" if self.style == "gnu" else "-l"
-            timed_command = ["/usr/bin/time", flag, *command]
+        flag = "-v" if self.style == "gnu" else "-l"
+        timed_command = ["/usr/bin/time", flag, *command]
+        return self._run_with_watchdog_core(timed_command, mode, is_wrapped=True)
 
-        start = time.perf_counter()
-        result = subprocess.run(timed_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-        wall_s = time.perf_counter() - start
+    def _run_with_watchdog_core(self, full_command: list[str], mode: str, is_wrapped: bool = False) -> RunResult:
+        """核心執行邏輯：非同步啟動行程並配置看門狗守護"""
+        start_time = time.perf_counter()
+        
+        # 啟動子行程 (不阻塞)
+        proc = subprocess.Popen(full_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        
+        # 定位真正的目標 Python PID (如果被 /usr/bin/time 包裹，需要找子行程)
+        target_pid = proc.pid
+        time.sleep(0.02) # 給系統一點時間 fork
+        if is_wrapped:
+            try:
+                ps_proc = psutil.Process(proc.pid)
+                children = ps_proc.children()
+                if children:
+                    target_pid = children[0].pid
+            except psutil.NoSuchProcess:
+                parent_dead = True
 
-        if result.returncode != 0:
-            raise RuntimeError(f"{program} failed for n={size}:\n{result.stderr.strip()}")
+        # 初始化看門狗執行緒
+        kill_event = threading.Event()
+        stop_event = threading.Event()
+        watchdog_thread = threading.Thread(
+            target=self._watchdog_worker, 
+            args=(target_pid, mode, kill_event, stop_event),
+            daemon=True
+        )
+        watchdog_thread.start()
 
+        # 等待行程結束
+        stdout_err, stderr_out = proc.communicate()
+        wall_s = time.perf_counter() - start_time
+        
+        # 關閉看門狗
+        stop_event.set()
+        watchdog_thread.join()
+
+        # 🚨 檢查是否是被看門狗主動砍掉的
+        if kill_event.is_set():
+            return RunResult(
+                wall_ms=wall_s * 1000,
+                user_ms=None,      # 填入 None (HTML中會轉為 N/A 或零)
+                system_ms=None,
+                memory_kb=None,
+            )
+
+        if proc.returncode != 0:
+            # 排除因被外部 SIGKILL 導致的 returncode
+            if proc.returncode in [-9, 137]: 
+                return RunResult(wall_ms=wall_s * 1000, user_ms=None, system_ms=None, memory_kb=None)
+            raise RuntimeError(f"Program failed with exit code {proc.returncode}:\n{stderr_out.strip()}")
+
+        # 正常結束，解析數據
         user_s = system_s = memory_kb = None
-        if self.style:
-            user_s, system_s, memory_kb = self._parse_time_output(result.stderr, self.style)
+        if self.style and is_wrapped:
+            user_s, system_s, memory_kb = self._parse_time_output(stderr_out, self.style)
 
         return RunResult(
             wall_ms=wall_s * 1000,
@@ -115,15 +205,12 @@ class TimeProbe:
             result = subprocess.run(probe, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
             if "Maximum resident set size" in result.stderr:
                 return "gnu"
-
             if platform.system() == "Darwin" and hasattr(os, "wait4"):
                 return "wait4"
-
             probe = [str(time_bin), "-l", sys.executable, "-c", "pass"]
             result = subprocess.run(probe, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
             if "maximum resident set size" in result.stderr.lower():
                 return "bsd"
-
         if hasattr(os, "wait4"):
             return "wait4"
         return None
@@ -132,7 +219,6 @@ class TimeProbe:
     def _parse_time_output(stderr: str, style: str) -> tuple[float | None, float | None, int | None]:
         user_s = system_s = None
         memory_kb = None
-
         if style == "gnu":
             for line in stderr.splitlines():
                 if "User time (seconds):" in line:
@@ -141,38 +227,7 @@ class TimeProbe:
                     system_s = safe_float(line.rsplit(":", 1)[1])
                 elif "Maximum resident set size (kbytes):" in line:
                     memory_kb = safe_int(line.rsplit(":", 1)[1])
-        elif style == "bsd":
-            for line in stderr.splitlines():
-                stripped = line.strip()
-                tokens = stripped.split()
-                if stripped.endswith("maximum resident set size"):
-                    bytes_value = safe_int(tokens[0])
-                    memory_kb = bytes_value // 1024 if bytes_value is not None else None
-                if "user" in tokens:
-                    user_s = safe_float(tokens[tokens.index("user") - 1])
-                if "sys" in tokens:
-                    system_s = safe_float(tokens[tokens.index("sys") - 1])
-
         return user_s, system_s, memory_kb
-
-    @staticmethod
-    def _run_with_wait4(command: list[str]) -> RunResult:
-        start = time.perf_counter()
-        proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-        _, status, usage = os.wait4(proc.pid, 0)
-        wall_s = time.perf_counter() - start
-        stderr = proc.stderr.read() if proc.stderr else ""
-        returncode = os.waitstatus_to_exitcode(status)
-        if returncode != 0:
-            raise RuntimeError(f"{' '.join(command)} failed:\n{stderr.strip()}")
-
-        memory_kb = int(usage.ru_maxrss // 1024) if platform.system() == "Darwin" else int(usage.ru_maxrss)
-        return RunResult(
-            wall_ms=wall_s * 1000,
-            user_ms=usage.ru_utime * 1000,
-            system_ms=usage.ru_stime * 1000,
-            memory_kb=memory_kb,
-        )
 
 
 class SyscallProbe:
@@ -186,8 +241,6 @@ class SyscallProbe:
     def command_notes(self, program: Path) -> list[ProbeCommand]:
         target = f"{self.python_bin} {program} <n>"
         status = "used" if self.strace_path and self.mode != "off" else "unavailable"
-        if self.mode == "off":
-            status = "disabled"
         return [
             ProbeCommand(
                 title="strace syscall summary",
@@ -199,21 +252,13 @@ class SyscallProbe:
         ]
 
     def run(self, program: Path, size: int) -> tuple[int | None, list[tuple[str, int]]]:
-        if self.mode == "off":
+        if self.mode == "off" or not self.strace_path:
             return None, []
-
-        if not self.strace_path:
-            if self.mode == "on":
-                raise RuntimeError("strace was requested, but it is not available on this system.")
-            return None, []
-
         command = [self.strace_path, "-c", self.python_bin, str(program), str(size)]
+        # 如果 strace 執行時子行程突然被看門狗殺掉，我們也進行防護捕獲
         result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         if result.returncode != 0:
-            if self.mode == "on":
-                raise RuntimeError(f"strace failed for n={size}:\n{result.stderr.strip()}")
             return None, []
-
         return self._parse_summary(result.stderr)
 
     @staticmethod
@@ -226,19 +271,16 @@ class SyscallProbe:
                 continue
             parts = line.split()
             if parts[-1] == "total":
-                numbers = [safe_int(p) for p in parts[:-1]]
-                numbers = [n for n in numbers if n is not None]
+                numbers = [safe_int(p) for p in parts[:-1] if safe_int(p) is not None]
                 if numbers:
                     total = numbers[-2] if len(numbers) >= 2 else numbers[-1]
                 continue
             syscall = parts[-1]
-            numbers = [safe_int(p) for p in parts[:-1]]
-            numbers = [n for n in numbers if n is not None]
+            numbers = [safe_int(p) for p in parts[:-1] if safe_int(p) is not None]
             if not numbers:
                 continue
             calls = numbers[-2] if len(numbers) >= 2 and len(parts) >= 6 else numbers[-1]
             rows.append((syscall, calls))
-
         if total is None and rows:
             total = sum(calls for _, calls in rows)
         rows.sort(key=lambda item: item[1], reverse=True)
@@ -246,11 +288,12 @@ class SyscallProbe:
 
 
 class MeasurementCollector:
-    """Coordinate resource probes across all input sizes."""
+    """Coordinate resource probes across all input sizes with policy integration."""
 
-    def __init__(self, python_bin: str, syscall_mode: str) -> None:
+    def __init__(self, python_bin: str, syscall_mode: str, mode: str = "normal") -> None:
         self.time_probe = TimeProbe(python_bin)
         self.syscall_probe = SyscallProbe(python_bin, syscall_mode)
+        self.mode = mode # 保存正常/緊急模式參數
 
     def collect(self, program: Path, sizes: list[int], repeats: int) -> tuple[list[Measurement], dict[str, object]]:
         metadata: dict[str, object] = {
@@ -258,13 +301,16 @@ class MeasurementCollector:
             "python": self.time_probe.python_bin,
             "time_tool": self.time_probe.tool_name,
             "strace": self.syscall_probe.strace_path or "unavailable",
+            "audit_mode": self.mode, # 將目前模式寫入 HTML 報表元數據
             "probe_commands": [command.__dict__ for command in self.command_notes(program)],
         }
 
         rows: list[Measurement] = []
         for size in sizes:
-            timed_runs = [self.time_probe.run(program, size) for _ in range(repeats)]
+            # 傳遞 mode 參數給 time_probe
+            timed_runs = [self.time_probe.run(program, size, self.mode) for _ in range(repeats)]
             syscall_count, top_syscalls = self.syscall_probe.run(program, size)
+            
             rows.append(
                 Measurement(
                     size=size,

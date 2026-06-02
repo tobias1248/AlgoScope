@@ -28,7 +28,7 @@ class AlgoScopeApp:
             return self._run_comparison(args)
 
         program, sizes = self._resolve_target(args)
-        collector = MeasurementCollector(args.python, args.syscalls)
+        collector = MeasurementCollector(args.python, args.syscalls, mode=args.mode)
         rows, metadata = collector.collect(program, sizes, args.repeats)
         estimate, scores = self.estimator.estimate(rows)
         summary = LlmSummaryService(args.llm_summary, args.llm_timeout, args.llm_model).generate(
@@ -119,6 +119,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repeats", type=int, default=3, help="Number of timing runs per input size.")
     parser.add_argument("--python", default=sys.executable, help="Python interpreter used for the target program.")
     parser.add_argument("--output", type=Path, default=ROOT / "reports", help="Output directory for the report.")
+    
+    # 🌟 新增：資源防禦模式切換按鈕/參數
+    parser.add_argument(
+        "--mode",
+        choices=["normal", "eco"],
+        default="normal",
+        help="Active auditing mode. 'eco' enforces strict resource quotas and kills intensive processes.",
+    )
+    
     parser.add_argument(
         "--llm-summary",
         choices=["off", "auto", "on"],
