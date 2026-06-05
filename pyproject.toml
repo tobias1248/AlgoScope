@@ -5,11 +5,14 @@ description = "Linux-based runtime complexity and resource visualizer for studen
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi",
     "github-copilot-sdk",
+    "uvicorn[standard]",
 ]
 
 [project.scripts]
 algoscope = "algoscope.cli:main"
+algoscope-api = "algoscope.api:main"
 
 [tool.uv]
 package = true
