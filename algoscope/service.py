@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from algoscope.complexity import ComplexityEstimator
+from algoscope.config import RUNTIME_DIR
 from algoscope.models import Measurement
 from algoscope.sandbox import SandboxLimits, SandboxRunResult, select_runner
 from algoscope.summary import LlmSummaryService
@@ -27,7 +28,8 @@ class AnalysisService:
         limits = SandboxLimits(timeout_seconds=request.timeout_seconds, memory_mb=request.memory_mb)
         runner = select_runner(request.runner)
 
-        with tempfile.TemporaryDirectory(prefix="algoscope-") as tmp:
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="algoscope-", dir=RUNTIME_DIR) as tmp:
             program = Path(tmp) / "solution.py"
             program.write_text(request.code, encoding="utf-8")
 

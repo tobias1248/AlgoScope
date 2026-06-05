@@ -81,6 +81,8 @@ Then choose `Docker` in the web UI runner selector, or send `"runner": "docker"`
 
 If Docker is not installed, `runner: auto` falls back to the local development runner. Local mode is useful for a quick demo on a trusted machine, but it should not be used for untrusted public submissions.
 
+Submitted code is staged under `.algoscope-runs/` before execution. This keeps Docker bind mounts inside the project tree, which is required by some Docker installations such as snap Docker. The directory is ignored by git and cleaned up after each run.
+
 ### API Shape
 
 Create an analysis:
