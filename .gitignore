@@ -3,3 +3,5 @@ __pycache__/
 .venv/
 algoscope.egg-info/
 reports/
+frontend/node_modules/
+frontend/dist/

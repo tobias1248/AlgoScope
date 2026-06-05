@@ -1,13 +1,14 @@
 # AlgoScope
 
-**AlgoScope: A Linux-based Runtime Complexity and Resource Visualizer for Students**
+**AlgoScope: A web-based Runtime Complexity and Resource Visualizer for Students**
 
-AlgoScope runs a Python program across multiple input sizes, measures process-level resource behavior, and generates an HTML report with charts and an estimated Big O growth pattern.
+AlgoScope runs a Python program across multiple input sizes, measures process-level resource behavior, and shows an educational React dashboard with charts and an estimated Big O growth pattern.
 
 It is designed as an Operating Systems final project demo: instead of only discussing Big O formulas, it shows how real programs consume wall time, CPU time, memory, and system calls under Linux.
 
 ## Features
 
+- Provides a React + FastAPI web demo for submitted Python programs.
 - Runs the target program as a separate process for each input size.
 - Measures wall time, user CPU time, system CPU time, and peak RSS via `/usr/bin/time`.
 - Falls back to `os.wait4` resource accounting on systems where `/usr/bin/time -v` is unavailable.
@@ -17,19 +18,86 @@ It is designed as an Operating Systems final project demo: instead of only discu
 - Optionally generates an OS-focused LLM summary with GitHub Copilot SDK.
 - Includes demo programs for linear search, bubble sort, Python sort, and I/O-heavy workloads.
 - Includes a comparison report showing two O(n) programs with different OS behavior.
+- Supports a Docker runner image for sandboxed demo execution, with a local development runner fallback when Docker is unavailable.
 
 ## Project Structure
 
 - `analyzer.py`: compatibility CLI entrypoint.
 - `main.py`: uv-friendly CLI entrypoint.
 - `algoscope/cli.py`: argument parsing and application workflow.
+- `algoscope/api.py`: FastAPI app for the web demo.
+- `algoscope/service.py`: web-first analysis workflow returning structured JSON.
+- `algoscope/sandbox.py`: Docker and local development runners with timeout and memory limits.
+- `algoscope/web_models.py`: web-facing request/result contracts.
 - `algoscope/comparison.py`: built-in comparison workflows.
 - `algoscope/probes.py`: OS probes for process timing, memory usage, and `strace` syscall summaries.
 - `algoscope/complexity.py`: Big O model fitting.
 - `algoscope/report.py`: JSON and HTML report generation.
 - `algoscope/summary.py`: optional GitHub Copilot SDK summary generation focused on OS observability.
 - `algoscope/models.py`: shared typed data objects.
+- `frontend/`: React + Vite analysis dashboard.
+- `docker/runner.Dockerfile`: Python runner image with `time` and `strace`.
 - `examples/`: built-in workload demos.
+
+## Web Demo Quick Start
+
+Install Python dependencies:
+
+```bash
+uv sync
+```
+
+Start the FastAPI backend:
+
+```bash
+uv run algoscope-api
+```
+
+In another terminal, start the React app:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open:
+
+```text
+http://127.0.0.1:5173
+```
+
+The frontend proxies `/api` requests to the backend at `http://127.0.0.1:8000`.
+
+### Docker Runner
+
+For sandboxed execution, build the runner image:
+
+```bash
+docker build -f docker/runner.Dockerfile -t algoscope-runner:latest .
+```
+
+Then choose `Docker` in the web UI runner selector, or send `"runner": "docker"` to `POST /api/analyses`.
+
+If Docker is not installed, `runner: auto` falls back to the local development runner. Local mode is useful for a quick demo on a trusted machine, but it should not be used for untrusted public submissions.
+
+### API Shape
+
+Create an analysis:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/analyses \
+  -H 'content-type: application/json' \
+  -d '{"code":"import sys\nn=int(sys.argv[1])\nprint(sum(range(n)))\n","sizes":[1000,2000,4000],"repeats":1,"syscalls":"off","llm_summary":"off","runner":"local"}'
+```
+
+Poll the returned job:
+
+```bash
+curl http://127.0.0.1:8000/api/analyses/<job_id>
+```
+
+Job status is separate from measurement status. A job can complete while individual input sizes are marked `timeout_killed`, `memory_killed`, `runtime_error`, or `probe_failed`.
 
 ## Quick Start
 
