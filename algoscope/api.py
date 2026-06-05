@@ -162,4 +162,4 @@ def _now() -> str:
 def main() -> None:
     import uvicorn
 
-    uvicorn.run("algoscope.api:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("algoscope.api:app", host="127.0.0.1", port=8000)

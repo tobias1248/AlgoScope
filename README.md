@@ -53,6 +53,8 @@ Start the FastAPI backend:
 uv run algoscope-api
 ```
 
+The packaged API command runs without Uvicorn reload so analysis jobs are not lost when submitted code is staged under `.algoscope-runs/`.
+
 In another terminal, start the React app:
 
 ```bash
