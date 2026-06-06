@@ -5,7 +5,6 @@ from __future__ import annotations
 import platform
 import statistics
 import tempfile
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -54,12 +53,13 @@ class AnalysisService:
             else:
                 estimate, scores = "insufficient_data", []
 
+            warnings = _analysis_warnings(rows, complexity_rows, runner.name)
+
             metadata: dict[str, Any] = {
                 "platform": platform.platform(),
                 "runner": runner.name,
                 "runner_warning": (
-                    "Local development runner is active because Docker was not selected or not found. "
-                    "Do not use local mode for untrusted public submissions."
+                    "Isolation fallback is active. Use only trusted code in this mode."
                     if runner.name == "local-dev"
                     else None
                 ),
@@ -69,6 +69,10 @@ class AnalysisService:
                 "repeats": request.repeats,
                 "syscalls": request.syscalls,
                 "successful_measurements": len(complexity_rows),
+                "confidence": "low" if warnings else "medium",
+                "warnings": warnings,
+                "local_observations": _local_observations(rows, estimate),
+                "syscall_explanations": _syscall_explanations(rows),
             }
 
             summary = None
@@ -130,6 +134,7 @@ class AnalysisService:
                 memory_kb=_median_optional_int([run.memory_kb for run in ok_runs]),
                 syscall_count=syscall_count,
                 top_syscalls=top_syscalls,
+                stdout_excerpt=_first_present([run.stdout_excerpt for run in ok_runs]),
                 stderr_excerpt=syscall_error,
                 repeats=[_repeat(run) for run in timed_runs],
             )
@@ -145,6 +150,7 @@ class AnalysisService:
             syscall_count=None,
             top_syscalls=[],
             exit_code=first.exit_code,
+            stdout_excerpt=first.stdout_excerpt,
             stderr_excerpt=first.stderr_excerpt,
             repeats=[_repeat(run) for run in timed_runs],
         )
@@ -158,6 +164,7 @@ def _repeat(run: SandboxRunResult) -> RepeatRun:
         system_ms=run.system_ms,
         memory_kb=run.memory_kb,
         exit_code=run.exit_code,
+        stdout_excerpt=run.stdout_excerpt,
         stderr_excerpt=run.stderr_excerpt,
         runner=run.runner,
     )
@@ -171,3 +178,93 @@ def _median_optional(values: list[float | None]) -> float | None:
 def _median_optional_int(values: list[int | None]) -> int | None:
     present = [value for value in values if value is not None]
     return int(statistics.median(present)) if present else None
+
+
+def _first_present(values: list[str | None]) -> str | None:
+    return next((value for value in values if value), None)
+
+
+def _analysis_warnings(rows: list[WebMeasurement], complexity_rows: list[Measurement], runner_name: str) -> list[str]:
+    warnings: list[str] = []
+    if len(complexity_rows) < 3:
+        warnings.append("Big O fit has low confidence because fewer than three successful measurements are available.")
+
+    cpu_times = [row.user_ms for row in rows if row.status in {"ok", "probe_failed"} and row.user_ms is not None]
+    if cpu_times and max(cpu_times) < 50:
+        warnings.append(
+            "Measured user CPU time is very small, so startup and measurement overhead may dominate the observed Big O fit."
+        )
+
+    if runner_name == "docker":
+        wall_times = [row.wall_ms for row in rows if row.status in {"ok", "probe_failed"} and row.wall_ms is not None]
+        user_times = [row.user_ms for row in rows if row.status in {"ok", "probe_failed"} and row.user_ms is not None]
+        if wall_times and user_times and max(user_times) * 4 < max(wall_times):
+            warnings.append("Wall time is much larger than user CPU time, which indicates sandbox startup overhead is significant.")
+
+    abnormal = [row for row in rows if row.status not in {"ok", "probe_failed"}]
+    if abnormal:
+        warnings.append("Some input sizes did not complete normally; Big O is estimated only from successful measurements.")
+
+    return warnings
+
+
+def _local_observations(rows: list[WebMeasurement], estimate: str) -> list[str]:
+    observations: list[str] = []
+    if estimate != "insufficient_data":
+        observations.append(f"Observed growth best matches {estimate}; this is a measurement fit, not a formal proof.")
+
+    abnormal = [row for row in rows if row.status not in {"ok", "probe_failed"}]
+    if abnormal:
+        sizes = ", ".join(str(row.size) for row in abnormal[:4])
+        observations.append(f"Abnormal execution was detected at input size(s): {sizes}. Check status and stderr details.")
+
+    syscall_rows = [row for row in rows if row.syscall_count is not None]
+    if syscall_rows:
+        latest = syscall_rows[-1]
+        top = ", ".join(name for name, _ in latest.top_syscalls[:3])
+        observations.append(f"Latest syscall sample counted {latest.syscall_count} calls; top syscalls include {top or 'n/a'}.")
+
+    memory_rows = [row for row in rows if row.memory_kb is not None]
+    if len(memory_rows) >= 2 and memory_rows[-1].memory_kb and memory_rows[0].memory_kb:
+        growth = memory_rows[-1].memory_kb / max(memory_rows[0].memory_kb, 1)
+        if growth >= 2:
+            observations.append(f"Peak RSS increased by about {growth:.1f}x across the measured range.")
+
+    if not observations:
+        observations.append("Run completed, but measurements are too small or sparse for a strong interpretation.")
+    return observations
+
+
+_SYSCALL_MEANINGS: dict[str, tuple[str, str]] = {
+    "read": ("Reads bytes from a file descriptor.", "Frequent reads usually indicate file, pipe, or interpreter/module loading activity."),
+    "write": ("Writes bytes to a file descriptor.", "Frequent writes point to stdout, logging, or file-output-heavy behavior."),
+    "open": ("Opens a filesystem path.", "Path opens indicate file access or dynamic runtime/library loading."),
+    "openat": ("Opens a path relative to a directory file descriptor.", "Many openat calls usually mean filesystem lookup, imports, temp files, or I/O workload."),
+    "close": ("Releases a file descriptor.", "Close calls tend to track file/socket lifecycle and cleanup."),
+    "newfstatat": ("Reads metadata for a path.", "High counts often come from module lookup, filesystem checks, or file-heavy workloads."),
+    "fstat": ("Reads metadata for an open file descriptor.", "This often accompanies file reads/writes or interpreter startup checks."),
+    "stat": ("Reads filesystem metadata.", "Stat-heavy traces indicate path probing or file existence checks."),
+    "lseek": ("Moves or checks the current file offset.", "Lseek often appears around buffered file reads and Python runtime file handling."),
+    "mmap": ("Maps files or anonymous memory into the process address space.", "Mmap reflects interpreter/library loading and memory allocation behavior."),
+    "munmap": ("Unmaps a memory region.", "Munmap shows cleanup of mapped files or memory regions."),
+    "brk": ("Moves the process heap boundary.", "Brk activity points to heap allocation pressure."),
+    "ioctl": ("Sends a device-specific control request.", "Ioctl often appears from terminal, file descriptor, or runtime environment checks."),
+    "getdents64": ("Reads directory entries.", "Directory scanning usually appears during imports or file discovery."),
+    "execve": ("Starts a new program image.", "Execve is process launch; it marks program startup."),
+    "clone": ("Creates a thread or process.", "Clone indicates concurrency or runtime-managed helper threads/processes."),
+    "futex": ("Waits or wakes userspace locks through the kernel.", "Futex activity points to thread synchronization or runtime locking."),
+}
+
+
+def _syscall_explanations(rows: list[WebMeasurement]) -> list[dict[str, object]]:
+    latest = next((row for row in reversed(rows) if row.top_syscalls), None)
+    if latest is None:
+        return []
+    explanations = []
+    for name, calls in latest.top_syscalls:
+        meaning, signal = _SYSCALL_MEANINGS.get(
+            name,
+            ("Kernel service requested by the process.", "Interpret this syscall together with the program code and resource trends."),
+        )
+        explanations.append({"name": name, "calls": calls, "meaning": meaning, "signal": signal})
+    return explanations

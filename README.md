@@ -85,6 +85,8 @@ If Docker is not installed, `runner: auto` falls back to the local development r
 
 Submitted code is staged under `.algoscope-runs/` before execution. This keeps Docker bind mounts inside the project tree, which is required by some Docker installations such as snap Docker. The directory is ignored by git and cleaned up after each run.
 
+Analysis job records are persisted under `.algoscope-runs/jobs/` so completed results can survive an API process restart during a demo. Program stdout is captured as a short excerpt and shown in the web UI; large output is truncated.
+
 ### API Shape
 
 Create an analysis:
@@ -101,7 +103,7 @@ Poll the returned job:
 curl http://127.0.0.1:8000/api/analyses/<job_id>
 ```
 
-Job status is separate from measurement status. A job can complete while individual input sizes are marked `timeout_killed`, `memory_killed`, `runtime_error`, or `probe_failed`.
+Job status is separate from measurement status. A job can complete while individual input sizes are marked `timeout_killed`, `memory_killed`, `runtime_error`, or `probe_failed`. Big O estimates are warnings-backed measurement fits, not formal proofs; very small programs can be dominated by runner overhead.
 
 ## Quick Start
 

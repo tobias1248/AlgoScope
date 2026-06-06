@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
+import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -75,7 +77,7 @@ class LlmSummaryService:
         prompt = self._build_prompt(program, rows, estimate, scores, metadata)
         config = SubprocessConfig(
             cwd=str(program.parent),
-            github_token=os.getenv("GITHUB_TOKEN"),
+            github_token=_github_token(),
             log_level="error",
         )
 
@@ -91,8 +93,8 @@ class LlmSummaryService:
                     "mode": "append",
                     "content": (
                         "You are an operating-systems teaching assistant. "
-                        "Summarize runtime measurement data for students. "
-                        "Focus on process behavior, CPU user/system time, peak RSS, syscalls, and I/O overhead. "
+                        "Explain Linux syscall and resource measurement data for students. "
+                        "Prioritize displayed syscalls, kernel-facing behavior, I/O overhead, system time, and RSS. "
                         "Do not claim formal proof of Big O complexity. "
                         "Return concise Traditional Chinese Markdown only."
                     ),
@@ -140,14 +142,21 @@ class LlmSummaryService:
             for probe in probe_commands
             if isinstance(probe, dict)
         )
+        syscall_explanations = metadata.get("syscall_explanations", [])
+        syscall_notes = "\n".join(
+            f"- {item.get('name')}: calls={item.get('calls')}, meaning={item.get('meaning')}, signal={item.get('signal')}"
+            for item in syscall_explanations
+            if isinstance(item, dict)
+        )
 
         return f"""請根據以下 AlgoScope 報告資料，寫一段給作業系統課學生看的摘要。
 
 要求：
 - 使用繁體中文。
-- 只輸出 3 到 5 個 bullet points。
-- 重點放在 OS 監測與效能觀察：process、wall/user/system CPU time、RSS memory、syscall、I/O overhead。
-- 可以提 Big O fitting，但要說這是 observed growth pattern，不是形式化證明。
+- 只輸出 4 到 6 個 bullet points。
+- 優先解釋顯示出來的 syscall：它們通常代表什麼 kernel 行為，以及這個程式為什麼會觸發它們。
+- 接著連到 resource usage：system CPU time、RSS memory、I/O overhead、process startup overhead。
+- Big O 只能放在最後輔助說明，且要說這是 observed growth pattern，不是形式化證明。
 - 如果 syscall 資料是 n/a，請明確說明需要 Linux strace 才能完整觀察 syscall。
 - 不要加入不存在的數據。
 
@@ -165,6 +174,9 @@ Best model scores:
 
 OS probes:
 {probes}
+
+Local syscall explanations:
+{syscall_notes or 'n/a'}
 """
 
     @staticmethod
@@ -172,3 +184,15 @@ OS probes:
         if summary is None:
             return None
         return asdict(summary)
+
+
+def _github_token() -> str | None:
+    token = os.getenv("GITHUB_TOKEN")
+    if token:
+        return token
+    if shutil.which("gh") is None:
+        return None
+    result = subprocess.run(["gh", "auth", "token"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None

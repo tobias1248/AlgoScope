@@ -35,6 +35,7 @@ class RepeatRun:
     system_ms: float | None
     memory_kb: int | None
     exit_code: int | None
+    stdout_excerpt: str | None
     stderr_excerpt: str | None
     runner: str
 
@@ -50,6 +51,7 @@ class WebMeasurement:
     syscall_count: int | None
     top_syscalls: list[tuple[str, int]]
     exit_code: int | None = None
+    stdout_excerpt: str | None = None
     stderr_excerpt: str | None = None
     repeats: list[RepeatRun] = field(default_factory=list)
 

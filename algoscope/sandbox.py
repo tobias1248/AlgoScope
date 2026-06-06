@@ -36,6 +36,7 @@ class SandboxRunResult:
     syscall_count: int | None
     top_syscalls: list[tuple[str, int]]
     exit_code: int | None
+    stdout_excerpt: str | None
     stderr_excerpt: str | None
     runner: str
 
@@ -51,12 +52,11 @@ class ProgramRunner(Protocol):
 
 
 def select_runner(mode: str, image: str = "algoscope-runner:latest") -> ProgramRunner:
-    docker_available = shutil.which("docker") is not None
     if mode == "docker":
         return DockerSandboxRunner(image)
     if mode == "local":
         return LocalSandboxRunner(sys.executable)
-    if docker_available:
+    if _docker_available():
         return DockerSandboxRunner(image)
     return LocalSandboxRunner(sys.executable)
 
@@ -78,17 +78,17 @@ class LocalSandboxRunner:
         start = time.perf_counter()
         proc = subprocess.Popen(
             timed_command,
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             start_new_session=True,
             preexec_fn=_limit_child(limits),
         )
         try:
-            _, stderr = proc.communicate(timeout=limits.timeout_seconds)
+            stdout, stderr = proc.communicate(timeout=limits.timeout_seconds)
         except subprocess.TimeoutExpired:
             _kill_process_group(proc.pid)
-            _, stderr = proc.communicate()
+            stdout, stderr = proc.communicate()
             return SandboxRunResult(
                 status="timeout_killed",
                 wall_ms=(time.perf_counter() - start) * 1000,
@@ -98,6 +98,7 @@ class LocalSandboxRunner:
                 syscall_count=None,
                 top_syscalls=[],
                 exit_code=None,
+                stdout_excerpt=_excerpt(stdout),
                 stderr_excerpt=_excerpt(stderr),
                 runner=self.name,
             )
@@ -117,6 +118,7 @@ class LocalSandboxRunner:
                 syscall_count=None,
                 top_syscalls=[],
                 exit_code=proc.returncode,
+                stdout_excerpt=_excerpt(stdout),
                 stderr_excerpt=None,
                 runner=self.name,
             )
@@ -130,6 +132,7 @@ class LocalSandboxRunner:
             syscall_count=None,
             top_syscalls=[],
             exit_code=proc.returncode,
+            stdout_excerpt=_excerpt(stdout),
             stderr_excerpt=_excerpt(stderr),
             runner=self.name,
         )
@@ -180,7 +183,7 @@ class DockerSandboxRunner:
         try:
             result = subprocess.run(
                 command,
-                stdout=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
                 timeout=limits.timeout_seconds + 1,
@@ -195,6 +198,7 @@ class DockerSandboxRunner:
                 syscall_count=None,
                 top_syscalls=[],
                 exit_code=None,
+                stdout_excerpt=_excerpt(exc.stdout if isinstance(exc.stdout, str) else None),
                 stderr_excerpt=_excerpt(exc.stderr if isinstance(exc.stderr, str) else None),
                 runner=self.name,
             )
@@ -215,6 +219,7 @@ class DockerSandboxRunner:
             syscall_count=None,
             top_syscalls=[],
             exit_code=result.returncode,
+            stdout_excerpt=_excerpt(result.stdout),
             stderr_excerpt=None if status == "ok" else _excerpt(result.stderr),
             runner=self.name,
         )
@@ -249,15 +254,21 @@ class DockerSandboxRunner:
             "none",
             "--memory",
             f"{limits.memory_mb}m",
+            "--memory-swap",
+            f"{limits.memory_mb}m",
             "--cpus",
             str(limits.cpus),
             "--pids-limit",
             "64",
+            "--user",
+            "1000:1000",
+            "--ulimit",
+            "nofile=256:256",
             "--read-only",
             "--tmpfs",
             "/tmp:rw,noexec,nosuid,size=64m",
             "--tmpfs",
-            "/work:rw,noexec,nosuid,size=64m",
+            "/work:rw,noexec,nosuid,size=64m,mode=1777",
             "-v",
             f"{work_dir}:/src:ro",
             self.image,
@@ -287,6 +298,18 @@ def _kill_process_group(pid: int) -> None:
         os.killpg(pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
+
+
+def _docker_available() -> bool:
+    if shutil.which("docker") is None:
+        return False
+    result = subprocess.run(
+        ["docker", "info", "--format", "{{.ServerVersion}}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return result.returncode == 0
 
 
 def _classify_failure(returncode: int | None, stderr: str | None) -> RunStatus:

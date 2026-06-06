@@ -11,7 +11,9 @@ def main() -> int:
     modulus = max(n * 3 + 1, 2)
     values = [(i * 1_103_515_245 + 12_345) % modulus for i in range(n)]
     values.sort()
-    print((values[0] + values[-1]) if values else 0)
+    first_ten = values[:10]
+    max_value = values[-1] if values else "n/a"
+    print(f"sorted {n} pseudo-random integers; first10={first_ten}; max={max_value}")
     return 0
 
 
