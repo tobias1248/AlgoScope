@@ -18,6 +18,10 @@ from pydantic import BaseModel, Field
 from algoscope.config import DEMO_CASES, RUNTIME_DIR
 from algoscope.service import AnalysisService
 from algoscope.web_models import AnalysisRequest
+from algoscope.sentinel import SentinelRunner, get_last_threat_log
+from fastapi import WebSocket
+import asyncio
+import psutil
 
 
 app = FastAPI(title="AlgoScope API", version="0.1.0")
@@ -162,7 +166,30 @@ def get_analysis(job_id: str) -> JobRecord:
         raise HTTPException(status_code=404, detail="Analysis job not found. The server may have restarted before this job was persisted.")
     return record
 
+@app.post("/api/sentinel/toggle")
+def toggle_monitor(enable: bool):
+    if enable:
+        SentinelRunner.start()
+        return {"status": "Sentinel Active"}
+    else:
+        SentinelRunner.stop()
+        return {"status": "Sentinel Inactive"}
 
+@app.websocket("/ws/system-stats")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            stats = {
+                "cpu": psutil.cpu_percent(interval=None),
+                "ram": psutil.virtual_memory().percent,
+                "last_killed": get_last_threat_log()
+            }
+            await websocket.send_json(stats)
+            await asyncio.sleep(1)
+    except Exception:
+        pass
+    
 def _run_job(job_id: str, request: AnalysisRequest) -> None:
     _replace(job_id, status="running", updated_at=_now())
     try:

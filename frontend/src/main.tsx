@@ -40,6 +40,7 @@ import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import "./styles.css";
+import MonitorPanel from './components/MonitorPanel';
 
 type JobState = "idle" | "queued" | "running" | "completed" | "failed";
 type RunStatus = "ok" | "timeout_killed" | "memory_killed" | "runtime_error" | "probe_failed";
@@ -417,6 +418,10 @@ function App() {
         </Badge>
       </Group>
 
+      <Box style={{ padding: '16px 0' }}>
+        <MonitorPanel />
+      </Box>
+      
       <section className="workspace">
         <Paper className="code-pane" radius="md" withBorder>
           <Group className="pane-header" justify="space-between" align="flex-start">
