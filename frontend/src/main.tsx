@@ -1,5 +1,44 @@
 import React, { useEffect, useMemo, useState } from "react";
+import {
+  Alert,
+  Badge,
+  Box,
+  Button,
+  Code,
+  Group,
+  MantineProvider,
+  NumberInput,
+  Paper,
+  ScrollArea,
+  SegmentedControl,
+  Select,
+  SimpleGrid,
+  Stack,
+  Table,
+  Text,
+  Textarea,
+  TextInput,
+  ThemeIcon,
+  Title,
+  createTheme,
+} from "@mantine/core";
+import "@mantine/core/styles.css";
+import "@mantine/notifications/styles.css";
+import { ModalsProvider } from "@mantine/modals";
+import { Notifications } from "@mantine/notifications";
+import {
+  IconActivityHeartbeat,
+  IconAlertTriangle,
+  IconBolt,
+  IconBrandPython,
+  IconChartDots,
+  IconCpu,
+  IconPlayerPlay,
+  IconTerminal2,
+} from "@tabler/icons-react";
 import { createRoot } from "react-dom/client";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import "./styles.css";
 
 type JobState = "idle" | "queued" | "running" | "completed" | "failed";
@@ -42,6 +81,14 @@ type SyscallExplanation = {
   signal: string;
 };
 
+type SyscallDictionaryEntry = {
+  name: string;
+  category: string;
+  meaning: string;
+  pythonTrigger: string;
+  note: string;
+};
+
 type JobRecord = {
   job_id: string;
   status: Exclude<JobState, "idle">;
@@ -63,6 +110,165 @@ for value in items:
 print(f"searched {n} items; target={target}")
 `;
 
+const SYSCALL_DICTIONARY: SyscallDictionaryEntry[] = [
+  {
+    name: "rt_sigaction",
+    category: "signal",
+    meaning: "Installs or reads a signal handler for the process.",
+    pythonTrigger: "Python configures handlers for signals such as SIGINT, SIGPIPE, and runtime-managed signal behavior during startup.",
+    note: "Seeing this in tiny scripts usually says more about interpreter startup than about the algorithm itself.",
+  },
+  {
+    name: "rt_sigprocmask",
+    category: "signal",
+    meaning: "Reads or changes the set of blocked signals for the current thread.",
+    pythonTrigger: "The interpreter or libraries may adjust signal masks around startup, subprocess, threading, or protected runtime sections.",
+    note: "Use it to discuss how Unix processes control which asynchronous events can interrupt execution.",
+  },
+  {
+    name: "execve",
+    category: "process",
+    meaning: "Replaces the current process image with a new program.",
+    pythonTrigger: "AlgoScope launches Python for each input size, so process startup normally includes execve.",
+    note: "This marks program launch, not work done by the submitted algorithm.",
+  },
+  {
+    name: "brk",
+    category: "memory",
+    meaning: "Moves the process heap boundary.",
+    pythonTrigger: "Python object allocation, list growth, imports, and interpreter startup can request heap space.",
+    note: "Rising brk activity can indicate heap allocation pressure, but mmap is also common for larger allocations.",
+  },
+  {
+    name: "mmap",
+    category: "memory",
+    meaning: "Maps files or anonymous memory into the process address space.",
+    pythonTrigger: "Python and the dynamic loader map shared libraries, bytecode, locale data, and anonymous memory regions.",
+    note: "In Python traces, mmap often reflects runtime setup and library loading as much as user code.",
+  },
+  {
+    name: "munmap",
+    category: "memory",
+    meaning: "Unmaps a memory region from the process address space.",
+    pythonTrigger: "Cleanup after mapped files, temporary runtime regions, or allocator-managed memory can trigger munmap.",
+    note: "Pair it with mmap to explain lifecycle: map a region, use it, release it.",
+  },
+  {
+    name: "openat",
+    category: "file",
+    meaning: "Opens a path relative to a directory file descriptor.",
+    pythonTrigger: "Imports, module lookup, reading source files, temp files, and ordinary file I/O commonly use openat.",
+    note: "High openat counts usually point to filesystem lookup or file-heavy workloads.",
+  },
+  {
+    name: "newfstatat",
+    category: "file",
+    meaning: "Reads metadata for a path.",
+    pythonTrigger: "Python import resolution and file existence checks often inspect path metadata.",
+    note: "It answers questions such as whether a path exists and what type/size/permissions it has.",
+  },
+  {
+    name: "read",
+    category: "file",
+    meaning: "Reads bytes from a file descriptor.",
+    pythonTrigger: "Loading modules, reading input files, pipes, or stdin can produce read calls.",
+    note: "Compare read counts with write counts to separate input-heavy and output-heavy behavior.",
+  },
+  {
+    name: "write",
+    category: "file",
+    meaning: "Writes bytes to a file descriptor.",
+    pythonTrigger: "print(), logging, stdout, stderr, and file output use write underneath.",
+    note: "Frequent writes usually mean output behavior, not CPU-bound computation.",
+  },
+  {
+    name: "close",
+    category: "file",
+    meaning: "Releases an open file descriptor.",
+    pythonTrigger: "Files, pipes, sockets, and runtime-opened descriptors are closed during cleanup.",
+    note: "Close calls often track the lifecycle of earlier open/openat calls.",
+  },
+  {
+    name: "lseek",
+    category: "file",
+    meaning: "Moves or checks the offset of an open file descriptor.",
+    pythonTrigger: "Buffered file reading, module loading, and random-access file operations can seek.",
+    note: "It is useful when explaining file-position state maintained by the kernel.",
+  },
+  {
+    name: "ioctl",
+    category: "device",
+    meaning: "Sends a device-specific control request to a file descriptor.",
+    pythonTrigger: "Terminal checks, descriptor configuration, and environment probing can issue ioctl.",
+    note: "It is a catch-all interface; interpretation depends strongly on the descriptor.",
+  },
+  {
+    name: "getdents64",
+    category: "file",
+    meaning: "Reads directory entries from a directory file descriptor.",
+    pythonTrigger: "Directory scans, package discovery, and import-related filesystem traversal can call getdents64.",
+    note: "This is the kernel-facing operation behind listing directory contents.",
+  },
+  {
+    name: "futex",
+    category: "scheduler",
+    meaning: "Waits or wakes threads through a fast userspace mutex path.",
+    pythonTrigger: "Threading, locks, runtime synchronization, and some libraries can use futex.",
+    note: "Futex connects userspace lock state with kernel sleep/wakeup only when contention requires it.",
+  },
+  {
+    name: "clone",
+    category: "process",
+    meaning: "Creates a new thread or process-like task.",
+    pythonTrigger: "Threading, multiprocessing, subprocess helpers, or runtime-managed workers can trigger clone.",
+    note: "It is the Linux primitive behind many process/thread creation APIs.",
+  },
+  {
+    name: "arch_prctl",
+    category: "process",
+    meaning: "Sets architecture-specific thread/process state.",
+    pythonTrigger: "The runtime loader and Python process startup configure thread-local storage on x86-64.",
+    note: "For small Python scripts, this is usually startup machinery rather than algorithm behavior.",
+  },
+  {
+    name: "set_tid_address",
+    category: "process",
+    meaning: "Registers where the kernel writes thread ID state for thread exit handling.",
+    pythonTrigger: "Process startup and threading runtime initialization can register this address.",
+    note: "It is part of Linux thread/process bookkeeping.",
+  },
+  {
+    name: "set_robust_list",
+    category: "scheduler",
+    meaning: "Registers robust futex state for cleanup if a thread exits while holding a lock.",
+    pythonTrigger: "Runtime initialization for threading and synchronization can set robust futex metadata.",
+    note: "It supports safer lock recovery when threads terminate unexpectedly.",
+  },
+  {
+    name: "prlimit64",
+    category: "process",
+    meaning: "Reads or sets process resource limits.",
+    pythonTrigger: "AlgoScope and runtimes may inspect or apply limits for memory, CPU, files, or other resources.",
+    note: "In this app, it is especially relevant because analyses run with timeout and memory limits.",
+  },
+];
+
+const theme = createTheme({
+  primaryColor: "teal",
+  defaultRadius: "md",
+  fontFamily:
+    "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+  fontFamilyMonospace: "SFMono-Regular, Consolas, Liberation Mono, monospace",
+  headings: {
+    fontWeight: "800",
+    sizes: {
+      h1: { fontSize: "32px", lineHeight: "1.08" },
+      h2: { fontSize: "18px", lineHeight: "1.25" },
+      h3: { fontSize: "14px", lineHeight: "1.35" },
+    },
+  },
+});
+
 function App() {
   const [demos, setDemos] = useState<DemoCase[]>([]);
   const [selectedDemo, setSelectedDemo] = useState("custom");
@@ -70,7 +276,7 @@ function App() {
   const [sizes, setSizes] = useState("20000 60000 120000 220000");
   const [repeats, setRepeats] = useState(2);
   const [timeoutSeconds, setTimeoutSeconds] = useState(4);
-  const [memoryMb, setMemoryMb] = useState(256);
+  const [memoryMb, setMemoryMb] = useState(512);
   const [syscalls, setSyscalls] = useState<"auto" | "on" | "off">("auto");
   const [summaryMode, setSummaryMode] = useState<"off" | "auto" | "on">("auto");
   const [jobId, setJobId] = useState<string | null>(null);
@@ -195,129 +401,185 @@ function App() {
   const isBusy = jobStatus === "queued" || jobStatus === "running";
 
   return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">OS runtime lab</p>
-          <h1>AlgoScope</h1>
-        </div>
-        <div className={`status-pill status-${jobStatus}`}>{jobStatus}</div>
-      </header>
+    <Box component="main" className="app-shell">
+      <Group className="topbar" justify="space-between" align="flex-end">
+        <Stack gap={2}>
+          <Text className="eyebrow">OS runtime lab</Text>
+          <Group gap="sm" align="center">
+            <ThemeIcon variant="light" size={38} radius="md" color="teal">
+              <IconActivityHeartbeat size={22} />
+            </ThemeIcon>
+            <Title order={1}>AlgoScope</Title>
+          </Group>
+        </Stack>
+        <Badge className={`status-pill status-${jobStatus}`} size="lg" variant="light">
+          {jobStatus}
+        </Badge>
+      </Group>
 
       <section className="workspace">
-        <div className="code-pane">
-          <div className="pane-header">
-            <div>
-              <h2>Program</h2>
-              <p>Growth runs pass input size as sys.argv[1]. Inspect once can run plain scripts like print("Hello World").</p>
-            </div>
-            <select value={selectedDemo} onChange={(event) => applyDemo(event.target.value)}>
-              <option value="custom">Custom</option>
-              {demos.map((demo) => (
-                <option key={demo.key} value={demo.key}>
-                  {demo.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <textarea
+        <Paper className="code-pane" radius="md" withBorder>
+          <Group className="pane-header" justify="space-between" align="flex-start">
+            <Stack gap={3}>
+              <Group gap="xs">
+                <ThemeIcon variant="subtle" color="teal" size={28}>
+                  <IconBrandPython size={18} />
+                </ThemeIcon>
+                <Title order={2}>Program</Title>
+              </Group>
+              <Text c="dimmed" size="sm">
+                Executed with Python; no shebang required. Growth runs pass <Code className="inline-code">n</Code> as{" "}
+                <Code className="inline-code">sys.argv[1]</Code>.
+              </Text>
+            </Stack>
+          </Group>
+          <Box className="program-toolbar">
+            <Select
+              className="demo-select"
+              size="xs"
+              label="Demo"
+              data={[
+                { value: "custom", label: "Custom" },
+                ...demos.map((demo) => ({ value: demo.key, label: demo.label })),
+              ]}
+              value={selectedDemo}
+              onChange={(value) => applyDemo(value ?? "custom")}
+              allowDeselect={false}
+            />
+          <TextInput
+            className="sizes-input"
+            size="xs"
+            label="Input sizes"
+            placeholder="100 500 1000"
+            value={sizes}
+            onChange={(event) => setSizes(event.target.value)}
+          />
+            <NumberInput
+            className="compact-number"
+            size="xs"
+            label="Repeats"
+            hideControls
+            min={1}
+            max={5}
+            value={repeats}
+            onChange={(value) => setRepeats(toNumber(value, 1))}
+          />
+          <NumberInput
+            className="compact-number"
+            size="xs"
+            label="Timeout (sec)"
+            hideControls
+            min={0.25}
+            max={30}
+            step={0.25}
+            value={timeoutSeconds}
+            onChange={(value) => setTimeoutSeconds(toNumber(value, 4))}
+          />
+          <NumberInput
+            className="compact-number"
+            size="xs"
+            label="Memory (MB)"
+            hideControls
+            min={64}
+            max={2048}
+            value={memoryMb}
+            onChange={(value) => setMemoryMb(toNumber(value, 512))}
+          />
+          <Box className="toolbar-segment">
+            <Text className="control-label">Syscalls</Text>
+            <SegmentedControl
+              size="xs"
+              fullWidth
+              data={["auto", "off", "on"]}
+              value={syscalls}
+              onChange={(value) => setSyscalls(value as typeof syscalls)}
+            />
+          </Box>
+          <Box className="toolbar-segment">
+            <Text className="control-label">Copilot</Text>
+            <SegmentedControl
+              size="xs"
+              fullWidth
+              data={["auto", "off", "on"]}
+              value={summaryMode}
+              onChange={(value) => setSummaryMode(value as typeof summaryMode)}
+            />
+          </Box>
+          <Button size="xs" variant="default" onClick={applyInspectOnce}>
+            Inspect
+          </Button>
+          <Button size="xs" variant="default" onClick={applyGrowthRun}>
+            Growth
+          </Button>
+          <Button
+            className="run-button"
+            leftSection={<IconPlayerPlay size={18} />}
+            loading={isBusy}
+            disabled={parsedSizes.length === 0}
+            onClick={runAnalysis}
+            size="sm"
+          >
+            {isBusy ? "Running..." : "Run analysis"}
+          </Button>
+          </Box>
+          {result?.metadata.runner_warning ? (
+            <Alert color="yellow" icon={<IconAlertTriangle size={18} />} variant="light">
+              {String(result.metadata.runner_warning)}
+            </Alert>
+          ) : null}
+          <Textarea
+            classNames={{ input: "code-editor" }}
             spellCheck={false}
             value={code}
+            autosize
+            minRows={18}
             onChange={(event) => {
               setSelectedDemo("custom");
               setCode(event.target.value);
             }}
           />
-          <div className="inline-output">
-            <div className="inline-output-head">
-              <h2>Program output</h2>
-              <span>stdout excerpt</span>
-            </div>
+          <Box className="inline-output">
+            <Group className="inline-output-head" justify="space-between">
+              <Title order={3}>Program output</Title>
+              <Badge variant="outline" color="gray">
+                stdout excerpt
+              </Badge>
+            </Group>
             <ProgramOutput rows={result?.measurements ?? []} compact />
-          </div>
-        </div>
-
-        <aside className="control-pane">
-          <h2>Experiment settings</h2>
-          <div className="mode-actions" aria-label="Experiment presets">
-            <button type="button" onClick={applyInspectOnce}>
-              Inspect once
-            </button>
-            <button type="button" onClick={applyGrowthRun}>
-              Growth run
-            </button>
-          </div>
-          <label>
-            Input sizes
-            <input value={sizes} onChange={(event) => setSizes(event.target.value)} />
-            <span className="field-help">Use 1 for one-shot syscall inspection. Use multiple values only when code reads sys.argv[1].</span>
-          </label>
-          <div className="control-grid">
-            <label>
-              Repeats
-              <input type="number" min={1} max={5} value={repeats} onChange={(event) => setRepeats(Number(event.target.value))} />
-              <span className="field-help">Median timing samples per size.</span>
-            </label>
-            <label>
-              Timeout
-              <input
-                type="number"
-                min={0.25}
-                max={30}
-                step={0.25}
-                value={timeoutSeconds}
-                onChange={(event) => setTimeoutSeconds(Number(event.target.value))}
-              />
-              <span className="field-help">Wall-clock kill threshold.</span>
-            </label>
-            <label>
-              Memory MB
-              <input type="number" min={64} max={2048} value={memoryMb} onChange={(event) => setMemoryMb(Number(event.target.value))} />
-              <span className="field-help">Memory ceiling for the submitted program.</span>
-            </label>
-          </div>
-          <p className="control-label">Syscall probe</p>
-          <div className="segmented">
-            {(["auto", "on", "off"] as const).map((mode) => (
-              <button key={mode} className={syscalls === mode ? "active" : ""} onClick={() => setSyscalls(mode)}>
-                syscalls {mode}
-              </button>
-            ))}
-          </div>
-          <p className="control-label">Copilot notes</p>
-          <div className="segmented">
-            {(["auto", "off", "on"] as const).map((mode) => (
-              <button key={mode} className={summaryMode === mode ? "active" : ""} onClick={() => setSummaryMode(mode)}>
-                AI {mode}
-              </button>
-            ))}
-          </div>
-          <button className="run-button" disabled={isBusy || parsedSizes.length === 0} onClick={runAnalysis}>
-            {isBusy ? "Running..." : "Run analysis"}
-          </button>
-          {result?.metadata.runner_warning ? <p className="warning">{String(result.metadata.runner_warning)}</p> : null}
-        </aside>
+          </Box>
+        </Paper>
       </section>
 
-      <section className="results">
-        <div className="section-head">
-          <div>
-            <h2>Resource signals</h2>
-            <p>Start here: these are the OS-level effects produced by the submitted program.</p>
-          </div>
-        </div>
+      <Stack component="section" className="results" gap="md">
+        <Group className="section-head" justify="space-between" align="flex-end">
+          <Stack gap={2}>
+            <Title order={2}>Resource signals</Title>
+            <Text c="dimmed" size="sm">
+              Start here: these are the OS-level effects produced by the submitted program.
+            </Text>
+          </Stack>
+        </Group>
 
-        <div className="metric-row resource-metrics">
-          <Metric label="Peak RSS" value={resourceSummary.peakMemory} />
-          <Metric label="Latest syscalls" value={resourceSummary.latestSyscalls} />
-          <Metric label="Peak system time" value={resourceSummary.peakSystemTime} />
-          <Metric label="Abnormal runs" value={String(abnormalRows.length)} tone={abnormalRows.length ? "warn" : "normal"} />
-        </div>
+        <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm" className="resource-metrics">
+          <Metric icon={<IconCpu size={18} />} label="Peak RSS" value={resourceSummary.peakMemory} />
+          <Metric icon={<IconTerminal2 size={18} />} label="Latest syscalls" value={resourceSummary.latestSyscalls} />
+          <Metric icon={<IconBolt size={18} />} label="Peak system time" value={resourceSummary.peakSystemTime} />
+          <Metric
+            icon={<IconAlertTriangle size={18} />}
+            label="Abnormal runs"
+            value={String(abnormalRows.length)}
+            tone={abnormalRows.length ? "warn" : "normal"}
+          />
+        </SimpleGrid>
 
-        {error ? <pre className="error-box">{error}</pre> : null}
+        {error ? (
+          <Alert color="red" icon={<IconAlertTriangle size={18} />} variant="light">
+            <pre className="error-box">{error}</pre>
+          </Alert>
+        ) : null}
         <Warnings warnings={warnings} />
 
-        <div className="resource-grid">
+        <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md" className="resource-grid">
           <Panel title="Syscall profile" description="Syscall counts come from strace and highlight kernel-facing I/O and process activity.">
             <SyscallTable rows={result?.measurements ?? []} />
           </Panel>
@@ -330,47 +592,70 @@ function App() {
           <Panel title="Runtime trend" description="Wall time includes process startup and measurement overhead; user time in the table shows CPU work inside Python.">
             <LineChart rows={okRows} field="wall_ms" unit="ms" />
           </Panel>
-        </div>
+        </SimpleGrid>
 
-        <div className="diagnostic-grid">
-          <Panel title="Analysis notes" description="Local observations are always available; the LLM summary appears when configured and authenticated.">
-            <Summary result={result} />
-          </Panel>
-        </div>
+        <Panel title="Analysis notes" description="Local observations are always available; the LLM summary appears when configured and authenticated.">
+          <Summary result={result} />
+        </Panel>
 
-        <div className="secondary-band">
-          <Panel title="Complexity fit" description="Big O is placed after resource behavior because it is an observed timing fit, not a proof of the algorithm.">
-            <div className="complexity-strip">
-              <ComplexityFact label="Observed Big O" value={result?.estimated_complexity ?? "n/a"} />
-              <ComplexityFact label="Fit confidence" value={String(result?.metadata.confidence ?? "n/a")} tone={warnings.length ? "warn" : "normal"} />
-              <ComplexityFact label="Successful points" value={String(result?.metadata.successful_measurements ?? 0)} />
-            </div>
-          </Panel>
-        </div>
+        <Panel title="Complexity fit" description="Big O is placed after resource behavior because it is an observed timing fit, not a proof of the algorithm.">
+          <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="md">
+            <ComplexityFact icon={<IconChartDots size={18} />} label="Observed Big O" value={result?.estimated_complexity ?? "n/a"} />
+            <ComplexityFact
+              icon={<IconActivityHeartbeat size={18} />}
+              label="Fit confidence"
+              value={String(result?.metadata.confidence ?? "n/a")}
+              tone={warnings.length ? "warn" : "normal"}
+            />
+            <ComplexityFact icon={<IconBolt size={18} />} label="Successful points" value={String(result?.metadata.successful_measurements ?? 0)} />
+          </SimpleGrid>
+        </Panel>
 
         <Panel title="Measurements" description="Expand a row to inspect exit code, stdout, stderr, and execution details.">
           <MeasurementTable rows={result?.measurements ?? []} />
         </Panel>
-      </section>
-    </main>
+      </Stack>
+    </Box>
   );
 }
 
-function Metric({ label, value, tone = "normal" }: { label: string; value: string; tone?: "normal" | "warn" }) {
+function Metric({ icon, label, value, tone = "normal" }: { icon: React.ReactNode; label: string; value: string; tone?: "normal" | "warn" }) {
   return (
-    <div className={`metric metric-${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
+    <Paper className={`metric metric-${tone}`} radius="md" withBorder>
+      <Group justify="space-between" align="flex-start">
+        <Stack gap={5}>
+          <Text className="metric-label">{label}</Text>
+          <Text className="metric-value">{value}</Text>
+        </Stack>
+        <ThemeIcon variant="light" color={tone === "warn" ? "red" : "teal"} size={34} radius="md">
+          {icon}
+        </ThemeIcon>
+      </Group>
+    </Paper>
   );
 }
 
-function ComplexityFact({ label, value, tone = "normal" }: { label: string; value: string; tone?: "normal" | "warn" }) {
+function ComplexityFact({
+  icon,
+  label,
+  value,
+  tone = "normal",
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  tone?: "normal" | "warn";
+}) {
   return (
-    <div className={`complexity-fact complexity-${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
+    <Box className={`complexity-fact complexity-${tone}`}>
+      <Group gap="xs" align="center">
+        <ThemeIcon variant="subtle" color={tone === "warn" ? "red" : "teal"} size={28}>
+          {icon}
+        </ThemeIcon>
+        <Text className="metric-label">{label}</Text>
+      </Group>
+      <Text className="complexity-value">{value}</Text>
+    </Box>
   );
 }
 
@@ -379,21 +664,27 @@ function Warnings({ warnings }: { warnings: string[] }) {
     return null;
   }
   return (
-    <section className="warning-list">
+    <Alert component="section" className="warning-list" color="yellow" icon={<IconAlertTriangle size={18} />} variant="light">
       {warnings.map((warning) => (
-        <p key={warning}>{warning}</p>
+        <Text key={warning} size="sm">
+          {warning}
+        </Text>
       ))}
-    </section>
+    </Alert>
   );
 }
 
 function Panel({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
   return (
-    <section className="panel">
-      <h2>{title}</h2>
-      {description ? <p className="panel-description">{description}</p> : null}
+    <Paper component="section" className="panel" radius="md" withBorder>
+      <Title order={2}>{title}</Title>
+      {description ? (
+        <Text className="panel-description" c="dimmed" size="sm">
+          {description}
+        </Text>
+      ) : null}
       {children}
-    </section>
+    </Paper>
   );
 }
 
@@ -434,7 +725,7 @@ function LineChart({ rows, field, unit }: { rows: Measurement[]; field: "wall_ms
 function SyscallTable({ rows }: { rows: Measurement[] }) {
   const syscallRows = rows.filter((row) => row.top_syscalls.length > 0 || row.syscall_count != null);
   if (!syscallRows.length) {
-    return <div className="empty">No syscall data yet. Use Linux with strace for complete syscall counts.</div>;
+    return <EmptyState>No syscall data yet. Use Linux with strace for complete syscall counts.</EmptyState>;
   }
   const signatures = syscallRows.map((row) => row.top_syscalls.map(([name]) => name).join(","));
   const stableShape = signatures.length > 1 && new Set(signatures).size === 1;
@@ -442,77 +733,139 @@ function SyscallTable({ rows }: { rows: Measurement[] }) {
   return (
     <div className="syscall-profile">
       {stableShape ? (
-        <p className="inline-note">
+        <Alert className="inline-note" color="orange" variant="light">
           Top syscalls are the same across input sizes. For tiny scripts or code that ignores argv[1], Python startup and file lookup often dominate the
           profile.
-        </p>
+        </Alert>
       ) : null}
-      <table>
-        <thead>
-          <tr>
-            <th>n</th>
-            <th>Total</th>
-            <th>Top syscalls</th>
-          </tr>
-        </thead>
-        <tbody>
-          {syscallRows.map((row) => (
-            <tr key={row.size}>
-              <td>{formatNumber(row.size)}</td>
-              <td>{row.syscall_count == null ? "n/a" : formatNumber(row.syscall_count)}</td>
-              <td>
+      <ScrollArea>
+        <Table verticalSpacing="sm" highlightOnHover>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>n</Table.Th>
+              <Table.Th>Total</Table.Th>
+              <Table.Th>Top syscalls</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {syscallRows.map((row) => (
+              <Table.Tr key={row.size}>
+                <Table.Td>{formatNumber(row.size)}</Table.Td>
+                <Table.Td>{row.syscall_count == null ? "n/a" : formatNumber(row.syscall_count)}</Table.Td>
+                <Table.Td>
                 <div className="syscall-chips">
                   {row.top_syscalls.map(([name, calls]) => (
-                    <span className="syscall-chip" key={`${row.size}-${name}`}>
-                      <strong>{name}</strong>
+                    <Badge className="syscall-chip" key={`${row.size}-${name}`} variant="outline" color="gray">
+                      <Code className="chip-code">{name}</Code>
                       {formatNumber(calls)}
-                    </span>
+                    </Badge>
                   ))}
                 </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+      </ScrollArea>
     </div>
   );
 }
 
 function SyscallExplanation({ result }: { result: AnalysisResult | null }) {
   if (!result) {
-    return <div className="empty">Run with syscall probing enabled to explain kernel activity.</div>;
+    return (
+      <div className="syscall-explain">
+        <SyscallDictionary />
+        <EmptyState compact>Run with syscall probing enabled to explain kernel activity.</EmptyState>
+      </div>
+    );
   }
   const explanations = syscallExplanations(result.metadata.syscall_explanations);
   const unavailableSummary = result.summary?.status === "unavailable" ? result.summary.body : null;
+  const showLocalFallback = result.summary?.status !== "generated";
   if (!explanations.length && !result.summary) {
-    return <div className="empty">No syscall explanation is available for this run.</div>;
+    return (
+      <div className="syscall-explain">
+        <SyscallDictionary />
+        <EmptyState compact>No syscall explanation is available for this run.</EmptyState>
+      </div>
+    );
   }
   return (
     <div className="syscall-explain">
+      <SyscallDictionary />
       {result.summary?.status === "generated" ? (
         <div className="copilot-note">
-          <span>Copilot</span>
-          <pre>{result.summary.body}</pre>
+          <Text className="metric-label">Copilot</Text>
+          <MarkdownBlock>{result.summary.body}</MarkdownBlock>
         </div>
       ) : null}
-      {unavailableSummary ? <p className="copilot-unavailable">{unavailableSummary}</p> : null}
-      {explanations.map((item) => (
+      {unavailableSummary ? <Text className="copilot-unavailable">{unavailableSummary}</Text> : null}
+      {showLocalFallback ? explanations.map((item) => (
         <div className="syscall-note" key={item.name}>
           <div>
-            <strong>{item.name}</strong>
-            <span>{formatNumber(item.calls)} calls</span>
+            <Code className="inline-code">{item.name}</Code>
+            <Badge variant="light" color="gray">
+              {formatNumber(item.calls)} calls
+            </Badge>
           </div>
-          <p>{item.meaning}</p>
-          <p>{item.signal}</p>
+          <Text size="sm">{item.meaning}</Text>
+          <Text c="dimmed" size="sm">
+            {item.signal}
+          </Text>
         </div>
-      ))}
+      )) : null}
+    </div>
+  );
+}
+
+function SyscallDictionary() {
+  const [selected, setSelected] = useState<string | null>(null);
+  const entry = SYSCALL_DICTIONARY.find((item) => item.name === selected);
+  return (
+    <Paper className="syscall-dictionary" radius="md" withBorder>
+      <Select
+        label="Syscall dictionary"
+        placeholder="Search a prepared syscall"
+        size="xs"
+        searchable
+        clearable
+        data={SYSCALL_DICTIONARY.map((item) => ({
+          value: item.name,
+          label: `${item.name} · ${item.category}`,
+        }))}
+        value={selected}
+        onChange={setSelected}
+      />
+      {entry ? (
+        <div className="dictionary-result">
+          <Group justify="space-between" align="center" gap="xs">
+            <Code className="inline-code">{entry.name}</Code>
+            <Badge variant="light" color="teal">
+              {entry.category}
+            </Badge>
+          </Group>
+          <DictionaryFact label="Meaning" value={entry.meaning} />
+          <DictionaryFact label="Python trigger" value={entry.pythonTrigger} />
+          <DictionaryFact label="OS note" value={entry.note} />
+        </div>
+      ) : null}
+    </Paper>
+  );
+}
+
+function DictionaryFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="dictionary-fact">
+      <Text className="metric-label">{label}</Text>
+      <Text size="sm">{value}</Text>
     </div>
   );
 }
 
 function Summary({ result }: { result: AnalysisResult | null }) {
   if (!result) {
-    return <div className="empty">Run an analysis to generate notes.</div>;
+    return <EmptyState>Run an analysis to generate notes.</EmptyState>;
   }
   const observations = metadataList(result.metadata.local_observations);
   return (
@@ -531,13 +884,13 @@ function Summary({ result }: { result: AnalysisResult | null }) {
 function ProgramOutput({ rows, compact = false }: { rows: Measurement[]; compact?: boolean }) {
   const rowsWithOutput = rows.filter((row) => row.stdout_excerpt);
   if (!rowsWithOutput.length) {
-    return <div className={compact ? "empty empty-compact" : "empty"}>No stdout captured yet.</div>;
+    return <EmptyState compact={compact}>No stdout captured yet.</EmptyState>;
   }
   return (
     <div className={compact ? "output-list output-list-compact" : "output-list"}>
       {rowsWithOutput.map((row) => (
         <div className="output-item" key={row.size}>
-          <span>n={formatNumber(row.size)}</span>
+          <Text className="metric-label">n={formatNumber(row.size)}</Text>
           <pre>{row.stdout_excerpt}</pre>
         </div>
       ))}
@@ -548,61 +901,85 @@ function ProgramOutput({ rows, compact = false }: { rows: Measurement[]; compact
 function MeasurementTable({ rows }: { rows: Measurement[] }) {
   const [expanded, setExpanded] = useState<number | null>(null);
   if (!rows.length) {
-    return <div className="empty">No measurements yet.</div>;
+    return <EmptyState>No measurements yet.</EmptyState>;
   }
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>n</th>
-          <th>Status</th>
-          <th>Wall</th>
-          <th>User</th>
-          <th>System</th>
-          <th>RSS</th>
-          <th>Syscalls</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <React.Fragment key={row.size}>
-            <tr className={row.status === "ok" ? "" : "bad-row"}>
-              <td>
-                <button className="row-toggle" onClick={() => setExpanded(expanded === row.size ? null : row.size)}>
-                  {formatNumber(row.size)}
-                </button>
-              </td>
-              <td>{row.status}</td>
-              <td>{formatMs(row.wall_ms)}</td>
-              <td>{formatMs(row.user_ms)}</td>
-              <td>{formatMs(row.system_ms)}</td>
-              <td>{row.memory_kb ? `${formatNumber(row.memory_kb)} KB` : "n/a"}</td>
-              <td>{row.syscall_count ? formatNumber(row.syscall_count) : "n/a"}</td>
-            </tr>
-            {expanded === row.size ? (
-              <tr className="detail-row">
-                <td colSpan={7}>
+    <ScrollArea>
+      <Table verticalSpacing="sm" highlightOnHover>
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th>n</Table.Th>
+            <Table.Th>Status</Table.Th>
+            <Table.Th>Wall</Table.Th>
+            <Table.Th>User</Table.Th>
+            <Table.Th>System</Table.Th>
+            <Table.Th>RSS</Table.Th>
+            <Table.Th>Syscalls</Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {rows.map((row) => (
+            <React.Fragment key={row.size}>
+              <Table.Tr className={row.status === "ok" ? "" : "bad-row"}>
+                <Table.Td>
+                  <Button variant="subtle" size="compact-sm" onClick={() => setExpanded(expanded === row.size ? null : row.size)}>
+                    {formatNumber(row.size)}
+                  </Button>
+                </Table.Td>
+                <Table.Td>
+                  <Badge color={row.status === "ok" ? "teal" : "red"} variant="light">
+                    {row.status}
+                  </Badge>
+                </Table.Td>
+                <Table.Td>{formatMs(row.wall_ms)}</Table.Td>
+                <Table.Td>{formatMs(row.user_ms)}</Table.Td>
+                <Table.Td>{formatMs(row.system_ms)}</Table.Td>
+                <Table.Td>{row.memory_kb ? `${formatNumber(row.memory_kb)} KB` : "n/a"}</Table.Td>
+                <Table.Td>{row.syscall_count ? formatNumber(row.syscall_count) : "n/a"}</Table.Td>
+              </Table.Tr>
+              {expanded === row.size ? (
+                <Table.Tr className="detail-row">
+                  <Table.Td colSpan={7}>
                   <div className="detail-grid">
                     <Detail label="Exit code" value={row.exit_code == null ? "n/a" : String(row.exit_code)} />
                     <Detail label="Stdout" value={row.stdout_excerpt || "n/a"} block />
                     <Detail label="Stderr" value={row.stderr_excerpt || "n/a"} block />
                   </div>
-                </td>
-              </tr>
-            ) : null}
-          </React.Fragment>
-        ))}
-      </tbody>
-    </table>
+                  </Table.Td>
+                </Table.Tr>
+              ) : null}
+            </React.Fragment>
+          ))}
+        </Table.Tbody>
+      </Table>
+    </ScrollArea>
   );
 }
 
 function Detail({ label, value, block = false }: { label: string; value: string; block?: boolean }) {
   return (
     <div className={block ? "detail detail-block" : "detail"}>
-      <span>{label}</span>
+      <Text className="metric-label">{label}</Text>
       {block ? <pre>{value}</pre> : <strong>{value}</strong>}
     </div>
+  );
+}
+
+function MarkdownBlock({ children }: { children: string }) {
+  return (
+    <div className="markdown-body">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>
+    </div>
+  );
+}
+
+function EmptyState({ children, compact = false }: { children: React.ReactNode; compact?: boolean }) {
+  return (
+    <Paper className={compact ? "empty empty-compact" : "empty"} radius="md" withBorder>
+      <Text c="dimmed" size="sm">
+        {children}
+      </Text>
+    </Paper>
   );
 }
 
@@ -618,6 +995,11 @@ function formatMs(value: number | null) {
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat().format(Math.round(value));
+}
+
+function toNumber(value: string | number, fallback: number) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function summarizeResources(rows: Measurement[]) {
@@ -651,4 +1033,11 @@ function syscallExplanations(value: unknown): SyscallExplanation[] {
   });
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(
+  <MantineProvider theme={theme}>
+    <ModalsProvider>
+      <Notifications position="top-right" />
+      <App />
+    </ModalsProvider>
+  </MantineProvider>,
+);
