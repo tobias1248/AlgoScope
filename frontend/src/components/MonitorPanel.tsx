@@ -3,10 +3,28 @@ import { Paper, Group, Stack, Text, Title, Badge, Button, Table, ScrollArea, Div
 import { IconShieldCheck, IconShieldOff, IconActivity, IconAlertTriangle } from '@tabler/icons-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 
+type SystemStats = {
+  cpu: number;
+  ram: number;
+  last_killed: string | null;
+};
+
+type ChartPoint = {
+  time: string;
+  cpu: number;
+  ram: number;
+};
+
+type ThreatLog = {
+  time: string;
+  pid: string;
+  reason: string;
+};
+
 function MonitorPanel() {
-  const [stats, setStats] = useState({ cpu: 0, ram: 0, last_killed: null });
-  const [chartData, setChartData] = useState<any[]>([]);
-  const [logs, setLogs] = useState<any[]>([]);
+  const [stats, setStats] = useState<SystemStats>({ cpu: 0, ram: 0, last_killed: null });
+  const [chartData, setChartData] = useState<ChartPoint[]>([]);
+  const [logs, setLogs] = useState<ThreatLog[]>([]);
   const [isSentinelOn, setIsSentinelOn] = useState(false);
 
   const CPU_COLOR = "#0ca678"; // teal
@@ -14,9 +32,10 @@ function MonitorPanel() {
   
   // 1. WebSocket 即時數據處理 (含折線圖數據積累)
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8000/ws/system-stats');
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws/system-stats`);
     ws.onmessage = (event) => {
-      const newData = JSON.parse(event.data);
+      const newData = JSON.parse(event.data) as SystemStats;
       setStats(newData);
       
       // 更新折線圖數據，只保留最近 20 筆
@@ -32,8 +51,8 @@ function MonitorPanel() {
   // 2. 歷史紀錄抓取
   const fetchLogs = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/sentinel/logs');
-      const data = await res.json();
+      const res = await fetch('/api/sentinel/logs');
+      const data = (await res.json()) as ThreatLog[];
       setLogs(data);
     } catch (err) { console.error(err); }
   };
@@ -47,13 +66,15 @@ function MonitorPanel() {
   // 3. 哨兵開關
   const toggleSentinel = async () => {
     const newState = !isSentinelOn;
-    await fetch('http://127.0.0.1:8000/api/sentinel/toggle', {
+    await fetch('/api/sentinel/toggle', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enable: newState })
     });
     setIsSentinelOn(newState);
   };
+
+  const lastKilledParts = stats.last_killed?.split(',') ?? [];
 
 return (
     <Paper withBorder p="xl" radius="lg" shadow="xl" mb="xl" bg="var(--mantine-color-body)" style={{ borderTop: `4px solid ${isSentinelOn ? 'red' : 'teal'}` }}>
@@ -87,19 +108,19 @@ return (
         <Stack gap="lg" style={{ flex: '0 0 240px' }}>
           <Stack gap="xs">
             <Paper withBorder p="md" radius="sm" bg="var(--mantine-color-gray-0)">
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" tracking="wide">CPU Load</Text>
+              <Text size="xs" fw={700} c="dimmed" tt="uppercase">CPU Load</Text>
               <Text size="38px" fw={900} style={{ color: CPU_COLOR, lineHeight: 1 }}>{stats.cpu}%</Text>
               <Badge color="teal" size="xs" variant="light" mt={3}>Teal Line</Badge>
             </Paper>
             <Paper withBorder p="md" radius="sm" bg="var(--mantine-color-gray-0)">
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" tracking="wide">RAM Usage</Text>
+              <Text size="xs" fw={700} c="dimmed" tt="uppercase">RAM Usage</Text>
               <Text size="38px" fw={900} style={{ color: RAM_COLOR, lineHeight: 1 }}>{stats.ram}%</Text>
               <Badge color="blue" size="xs" variant="light" mt={3}>Blue Line</Badge>
             </Paper>
           </Stack>
           {stats.last_killed && (
-            <Alert color="red" variant="filled" icon={<IconAlertTriangle size={18} />} title="Kill Event" size="lg">
-              PID: {stats.last_killed.split(',')[1]} | {stats.last_killed.split(',').pop()}
+            <Alert color="red" variant="filled" icon={<IconAlertTriangle size={18} />} title="Kill Event">
+              PID: {lastKilledParts[1] ?? "unknown"} | {lastKilledParts.at(-1) ?? stats.last_killed}
             </Alert>
           )}
         </Stack>
@@ -135,7 +156,7 @@ return (
 
       {/* 底部紀錄表格 - 維持精緻感 */}
       <ScrollArea h={180}>
-        <Table fontSize="xs" verticalSpacing="xs" highlightOnHover>
+        <Table verticalSpacing="xs" highlightOnHover>
           <Table.Thead>
             <Table.Tr>
               <Table.Th>Timestamp</Table.Th><Table.Th>Process ID</Table.Th><Table.Th>Termination Reason</Table.Th>
