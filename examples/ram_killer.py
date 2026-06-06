@@ -1,5 +1,9 @@
 import time
 data = []
-while True:
-    data.append(' ' * 10**6) # 每次增加 1MB 記憶體
-    time.sleep(0.1)
+try:
+    while True:
+        # 每次增加 10MB
+        data.append(' ' * (10 * 1024 * 1024)) 
+        time.sleep(0.05)
+except MemoryError:
+    print("Memory exhausted!")

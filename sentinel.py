@@ -2,15 +2,13 @@ import psutil
 import signal
 import time
 import os
-import datetime  # 必須加上這行，否則會報錯
+import datetime
 
 def is_managed_process(proc):
-    """檢查該進程是否屬於 AlgoScope 家族"""
     try:
         parent = proc.parent()
         for _ in range(5):
             if parent is None: break
-            # 檢查父進程的指令列，確認是否包含 analyzer.py 或 app.py
             cmdline = " ".join(parent.cmdline())
             if "analyzer.py" in cmdline or "app.py" in cmdline:
                 return True
@@ -22,28 +20,40 @@ def is_managed_process(proc):
 def sentinel_mode():
     print("System Sentinel Active...")
     while True:
-        # 修正縮排：將 for 和 try 對齊
-        for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent', 'num_threads']):
+        for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_info', 'num_threads']):
             try:
-                # 監控條件
-                if (proc.info['cpu_percent'] > 80.0 or 
-                    (proc.info['memory_percent'] or 0) > 40.0 or 
-                    (proc.info['num_threads'] or 0) > 200):
-                    
-                    if proc.pid != os.getpid() and proc.info['name'] == 'python3':
-                        msg = "Managed" if is_managed_process(proc) else "MALICIOUS"
-                        
-                    # 紀錄並撲殺
-                    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    log_entry = f"{now},{proc.pid},{msg}\n"
+                rss_mb = (proc.info['memory_info'].rss / (1024 * 1024)) if proc.info['memory_info'] else 0
+                cpu = proc.info['cpu_percent'] or 0
+                num_threads = proc.info['num_threads'] or 0
+                
+                # 1. 進行個別檢查並記錄原因
+                violation_reasons = []
+                if cpu > 80.0: violation_reasons.append(f"CPU({cpu:.1f}%)")
+                if rss_mb > 1000: violation_reasons.append(f"MEM({rss_mb:.0f}MB)")
+                if num_threads > 200: violation_reasons.append(f"THR({num_threads})")
 
-                    with open("threat_log.txt", "a") as f:
-                        f.write(log_entry)
+                # 2. 如果有違規，進行記錄並撲殺
+                if violation_reasons:
+                    if proc.pid != os.getpid() and "python" in proc.info['name'].lower():
+                        if is_managed_process(proc): continue
+                        
+                        # 合併原因，例如: "CPU(85.2%)+MEM(1200MB)"
+                        reason_str = "+".join(violation_reasons)
+                        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        
+                        # 寫入日誌
+                        log_entry = f"{now},{proc.pid},MALICIOUS,{reason_str}\n"
+                        with open("threat_log.txt", "a") as f:
+                            f.write(log_entry)
+                            f.flush()
+                            os.fsync(f.fileno())
                             
+                        print(f"[{now}] 🔥 Kill PID: {proc.pid} | Reason: {reason_str}")
                         proc.send_signal(signal.SIGKILL)
+                        
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
-        time.sleep(0.5)
+        time.sleep(0.5) 
 
 if __name__ == "__main__":
     sentinel_mode()

@@ -85,54 +85,48 @@ class TimeProbe:
         return notes
 
     def _watchdog_worker(self, pid: int, mode: str, kill_event: threading.Event, stop_event: threading.Event):
-        """背景看門狗執行緒：每 0.05 秒檢查子行程狀態，爆表就主動 Kill 掉"""
-        try:
-            proc = psutil.Process(pid)
-            
-            # 🌟 修正1：重新調整資源閾值
-            # Eco 模式：嚴格節能，限制 CPU 60% 與 記憶體 150MB
-            # Normal 模式：完全放行 CPU 讓常規演算法滿載狂飆，將 CPU 門檻設為無限大 (999.0)，記憶體設 2GB 作為防自焚底線
-            cpu_limit = 60.0 if mode == "eco" else 999.0
-            mem_limit_mb = 150.0 if mode == "eco" else 2048.0
-
-            # 預熱 psutil 的 cpu_percent
-            proc.cpu_percent(interval=None)
-            
-            while not stop_event.is_set() and proc.is_running():
-                # 取得即時資源狀態
-                cpu_usage = proc.cpu_percent(interval=None)
-                mem_mb = proc.memory_info().rss / (1024 * 1024)
-
-                if cpu_usage > cpu_limit or mem_mb > mem_limit_mb:
-                    print(f"\n🚨 [Watchdog Alert - {mode.upper()} MODE]")
-                    print(f"⚠️  PID {pid} Exceeded Quota! CPU: {cpu_usage}%, MEM: {mem_mb:.1f} MB")
-                    print(f"🛑 [OS Action] Sending SIGKILL to process tree to prevent system thrashing...")
+            try:
+                proc = psutil.Process(pid)
+                
+                # 閾值設定：Normal 放行，Eco 嚴格限制
+                cpu_limit = 60.0 if mode == "eco" else 999.0
+                mem_limit_mb = 10.0 if mode == "eco" else 2048.0
+                # 關鍵補丁：Eco 模式下若 I/O 總量超過 5MB 就判定過載
+                io_limit_mb = 5.0 if mode == "eco" else 999.0
+                
+                proc.cpu_percent(interval=None)
+                
+                while not stop_event.is_set() and proc.is_running():
+                    # 1. 基礎資源監控
+                    cpu_usage = proc.cpu_percent(interval=None)
+                    mem_mb = proc.memory_info().rss / (1024 * 1024)
                     
-                    # 🌟 修正2：採用行程樹全數撲殺（Kill Process Tree）連坐法，防止外層監測工具卡死
+                    # 2. I/O 監控 (這能抓到 io_heavy.py)
                     try:
-                        parent = proc.parent()
-                        
-                        # 先宰了作怪的目標 Python 子行程
-                        proc.kill()
-                        
-                        # 如果外層包著 /usr/bin/time 或 strace 且不是主程式，一併強制清理
-                        if parent and parent.pid != os.getpid():
-                            parent.kill()
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        # 備用防線：如果 psutil 抓失敗，改用 os.kill 跨平台安全訊號
-                        try:
-                            if platform.system() == "Windows":
-                                os.kill(pid, signal.SIGTERM)
-                            else:
-                                os.kill(pid, getattr(signal, "SIGKILL", 9))
-                        except ProcessLookupError:
-                            pass
+                        io = proc.io_counters()
+                        io_mb = (io.read_bytes + io.write_bytes) / (1024 * 1024)
+                    except (AttributeError, psutil.AccessDenied):
+                        io_mb = 0
                     
-                    kill_event.set()
-                    break
-                time.sleep(0.05)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
+                    # 判斷觸發條件
+                    if cpu_usage > cpu_limit or mem_mb > mem_limit_mb or (mode == "eco" and io_mb > io_limit_mb):
+                        print(f"\n🚨 [Watchdog Alert - {mode.upper()} MODE]")
+                        print(f"⚠️ PID {pid} 超限! CPU:{cpu_usage}%, MEM:{mem_mb:.1f}MB, I/O:{io_mb:.1f}MB")
+                        
+                        # 殺掉行程樹
+                        try:
+                            parent = proc.parent()
+                            proc.kill()
+                            if parent and parent.pid != os.getpid():
+                                parent.kill()
+                        except:
+                            pass
+                        
+                        kill_event.set()
+                        break
+                    time.sleep(0.05)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
 
     def run(self, program: Path, size: int, mode: str = "normal") -> RunResult:
         command = [self.python_bin, str(program), str(size)]

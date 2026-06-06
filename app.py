@@ -6,6 +6,7 @@ import os
 import glob 
 import signal
 import streamlit.components.v1 as components
+from streamlit_autorefresh import st_autorefresh
 from pathlib import Path
 
 # System Configuration
@@ -79,17 +80,33 @@ repeats = st.sidebar.slider("Sample Runs (Repeats)", 1, 5, 3)
 enable_sentinel = st.sidebar.checkbox("Enable System-wide Sentinel")
 
 if enable_sentinel:
-    # 這裡啟動背景進程
-    # 技巧：使用 subprocess 啟動，並記錄 PID，這樣網頁關掉時可以順便砍掉 Sentinel
+    # 啟動邏輯
     if "sentinel_pid" not in st.session_state:
         p = subprocess.Popen(["python3", "sentinel.py"])
         st.session_state.sentinel_pid = p.pid
         st.sidebar.success(f"Sentinel running (PID: {p.pid})")
-else:
-    if "sentinel_pid" in st.session_state:
-        os.kill(st.session_state.sentinel_pid, signal.SIGKILL)
+    # 增加：如果 PID 記錄還在，但其實進程已經死掉，幫使用者重啟
+    elif not psutil.pid_exists(st.session_state.sentinel_pid):
         del st.session_state.sentinel_pid
-        st.sidebar.warning("Sentinel disabled.")
+        st.rerun()
+
+else:
+    # 關閉邏輯
+    if "sentinel_pid" in st.session_state:
+        target_pid = st.session_state.sentinel_pid
+        
+        # [核心修正] 檢查 PID 是否真的存在，避免 ProcessLookupError
+        if psutil.pid_exists(target_pid):
+            try:
+                os.kill(target_pid, signal.SIGKILL)
+                st.sidebar.warning(f"Sentinel (PID: {target_pid}) killed.")
+            except Exception as e:
+                st.sidebar.error(f"Kill failed: {e}")
+        else:
+            st.sidebar.info("Sentinel process already gone.")
+            
+        # 無論是否成功殺掉，都要清除 session_state 記錄
+        del st.session_state.sentinel_pid
 
 # 即時監控按鈕功能
 st.subheader("Live Threat Map (Real-time Audit)")
@@ -131,10 +148,19 @@ with st.expander("🛡️ Recent Threat Log (Click to view history)"):
         with open("threat_log.txt", "r") as f:
             logs = f.readlines()[-10:] # 只讀取最後 10 筆
             for log in reversed(logs):
-                # 這裡假設你的 log 格式是 時間,PID,類型
+                # 這裡修正為 len(parts) >= 3，或者直接檢查是否為 4
                 parts = log.strip().split(',')
-                if len(parts) == 3:
-                    st.write(f"🕒 **{parts[0]}** | 💀 PID: `{parts[1]}` | 類別: `{parts[2]}`")
+                if len(parts) >= 4:
+                    # 加入顯示「原因 (reason)」的欄位
+                    time_str = parts[0]
+                    pid_str = parts[1]
+                    status_str = parts[2]
+                    reason_str = parts[3]
+                    
+                    st.write(f"🕒 **{time_str}** | PID: `{pid_str}` | 類別: `{status_str}` | 原因: `{reason_str}`")
+                elif len(parts) == 3:
+                    # 處理舊版的 Log (如果還有舊格式)
+                    st.write(f"🕒 **{parts[0]}** | PID: `{parts[1]}` | 類別: `{parts[2]}`")
     else:
         st.write("No threats recorded yet.")
 
@@ -144,45 +170,49 @@ with st.expander("🛡️ Recent Threat Log (Click to view history)"):
 st.subheader("2. Benchmarking Engine")
 
 if st.button("Execute Profile Run", type="primary"):
-    with st.spinner("Spawning process wrappers (time/strace) and initializing async watchdog thread..."):
+    with st.spinner("Initializing Benchmarking Engine..."):
+        # 1. 定義絕對路徑，消除環境差異
+        abs_program_path = os.path.abspath(program_path)
+        abs_analyzer_path = os.path.abspath("analyzer.py")
+        abs_cwd = os.getcwd() # 獲取當前專案根目錄
         
-        # 🌟 偵錯防線 1：檢查受測程式路徑到底對不對
-        if not os.path.exists(program_path):
-            st.error(f"❌ Target workload file not found at: `{program_path}`")
-            st.info("Please verify that the 'examples/' directory exists and contains the target script.")
-        else:
-            # 🌟 偵錯防線 2：確保能同時抓到標準輸出 (stdout) 與錯誤輸出 (stderr)
-            # 這樣萬一是 analyzer.py 本身當掉，我們才看得到原因
-            cmd = [
-                "python3", "analyzer.py",
-                "--program", program_path,
-                "--sizes", "500",
-                "--repeats", str(repeats),
-                "--mode", mode
-            ]
+        # 2. 構建指令
+        cmd = [
+            "python3", abs_analyzer_path,
+            "--program", abs_program_path,
+            "--sizes", "100", "200", "300", "400", "500",
+            "--repeats", str(repeats),
+            "--mode", mode  # 直接傳入 UI 選擇的 'normal' 或 'eco'
+        ]
+        
+        # 3. 複製當前環境並加入專案路徑，解決 ModuleNotFound 問題
+        my_env = os.environ.copy()
+        my_env["PYTHONPATH"] = abs_cwd
+        
+        try:
+            # 執行分析器
+            result = subprocess.run(
+                cmd, 
+                env=my_env,          # 注入環境變數
+                cwd=abs_cwd,         # 強制在專案根目錄執行
+                capture_output=True, # 完整捕捉錯誤輸出
+                text=True, 
+                timeout=60
+            )
             
-            try:
-                # 改用 capture_output=True 且不分流，讓 stderr 全部併入 stdout
-                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=30)
+            # 處理輸出
+            if result.returncode == 0:
+                st.success("Execution Completed Successfully.")
+                st.text_area("Console Output", value=result.stdout, height=200)
+            else:
+                st.error(f"❌ Backend returned exit code {result.returncode}")
+                # 這裡會顯示導致失敗的詳細原因（如 psutil 缺失或路徑錯誤）
+                st.error("Error Details:")
+                st.text_area("Stderr", value=result.stderr, height=300)
                 
-                # UI Status Interceptor
-                if "Watchdog Alert" in result.stdout:
-                    st.error("⚠️ Policy Transgression Detected: Active Watchdog triggered SIGKILL termination.")
-                elif result.returncode != 0:
-                    st.warning(f"⚠️ Backend exited with non-zero code ({result.returncode}). See log below.")
-                else:
-                    st.success("Execution Completed: Target process terminated with Exit Code 0.")
-                    
-                # Core Stderr/Stdout Stream
-                if result.stdout.strip():
-                    st.text_area("Console Output (Kernel Stream Log)", value=result.stdout, height=250)
-                else:
-                    st.text_area("Console Output (Kernel Stream Log)", value="[Backend executed but returned no stdout/stderr stream output]", height=100)
-                    
-            except Exception as e:
-                st.error(f"❌ Failed to execute benchmarking command: {str(e)}")
-
-st.markdown("---")
+        except Exception as e:
+            st.error(f"❌ Execution Failure: {str(e)}")
+            st.code(f"Command attempted: {' '.join(cmd)}")
 
 # ==========================================
 # 4. Embedded Analytical Visualizations
