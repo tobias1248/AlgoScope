@@ -39,12 +39,20 @@ It is designed as an Operating Systems final project demo: instead of only discu
 - `docker/runner.Dockerfile`: Python runner image with `time` and `strace`.
 - `examples/`: built-in workload demos.
 
-## Web Demo Quick Start
+## Local Development Quick Start
 
-Install Python dependencies:
+Use this flow when you want to run the React frontend, FastAPI backend, and sandboxed command runner on your own machine while developing.
+
+Install Python dependencies from the repository root:
 
 ```bash
 uv sync
+```
+
+Build the Docker runner image used by the web command runner:
+
+```bash
+docker build -f docker/runner.Dockerfile -t algoscope-runner:latest .
 ```
 
 Start the FastAPI backend:
@@ -71,19 +79,34 @@ http://127.0.0.1:5173
 
 The frontend proxies `/api` requests to the backend at `http://127.0.0.1:8000`.
 
-### Docker Runner
-
-For sandboxed execution, build the runner image:
+For repeated local work, run the backend and frontend in separate terminal tabs or tmux panes:
 
 ```bash
-docker build -f docker/runner.Dockerfile -t algoscope-runner:latest .
+# pane 1: backend
+cd /path/to/AlgoScope
+uv run algoscope-api
 ```
 
-Then choose `Docker` in the web UI runner selector, or send `"runner": "docker"` to `POST /api/analyses`.
+```bash
+# pane 2: frontend
+cd /path/to/AlgoScope/frontend
+npm run dev
+```
+
+### Docker Runner
+
+Choose `Docker` in the web UI runner selector, or send `"runner": "docker"` to `POST /api/analyses`.
 
 If Docker is not installed, `runner: auto` falls back to the local development runner. Local mode is useful for a quick demo on a trusted machine, but it should not be used for untrusted public submissions.
 
 Submitted code is staged under `.algoscope-runs/` before execution. This keeps Docker bind mounts inside the project tree, which is required by some Docker installations such as snap Docker. The directory is ignored by git and cleaned up after each run.
+
+When Docker is selected, the backend executes the submitted Python program inside `algoscope-runner:latest` with:
+
+- no network access
+- memory, CPU, process, and file descriptor limits
+- read-only source mount
+- temporary writable `/tmp` and `/work` filesystems
 
 Analysis job records are persisted under `.algoscope-runs/jobs/` so completed results can survive an API process restart during a demo. Program stdout is captured as a short excerpt and shown in the web UI; large output is truncated.
 
@@ -105,19 +128,47 @@ curl http://127.0.0.1:8000/api/analyses/<job_id>
 
 Job status is separate from measurement status. A job can complete while individual input sizes are marked `timeout_killed`, `memory_killed`, `runtime_error`, or `probe_failed`. Big O estimates are warnings-backed measurement fits, not formal proofs; very small programs can be dominated by runner overhead.
 
-## Quick Start
+## Local Test Commands
+
+Run a small CLI smoke test without syscall tracing:
+
+```bash
+python3 analyzer.py --case bubble_sort --sizes 10 20 --repeats 1 --syscalls off
+```
+
+Compile-check the Python source:
+
+```bash
+python3 -m compileall algoscope examples analyzer.py main.py
+```
+
+Build the React frontend:
+
+```bash
+cd frontend
+npm run build
+```
+
+Run the FastAPI backend directly:
+
+```bash
+uv run algoscope-api
+```
+
+Run the frontend dev server:
+
+```bash
+cd frontend
+npm run dev
+```
+
+## CLI Usage
+
+Run a built-in case and write a static report under `reports/`:
 
 ```bash
 python3 analyzer.py --case bubble_sort
 ```
-
-Open the generated HTML report from the printed path, for example:
-
-```text
-reports/bubble_sort-report.html
-```
-
-A committed sample report is available at `docs/bubble_sort-report.html`.
 
 To include an LLM-generated summary focused on OS monitoring:
 
