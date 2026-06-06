@@ -91,20 +91,43 @@ else:
         del st.session_state.sentinel_pid
         st.sidebar.warning("Sentinel disabled.")
 
+# 即時監控按鈕功能
 st.subheader("Live Threat Map (Real-time Audit)")
 
-# 讀取威脅計數
-if not os.path.exists("threat_log.txt"): open("threat_log.txt", "w").close()
-with open("threat_log.txt", "r") as f: threat_count = len(f.readlines())
+# 建立一個佔位容器，這是監控顯示的家
+monitor_container = st.empty()
 
-col1, col2, col3 = st.columns(3)
-col1.metric("CPU Load", f"{psutil.cpu_percent()}%")
-col2.metric("Threats Blocked", threat_count)
-col3.metric("System Status", "🛡️ Running" if "sentinel_pid" in st.session_state else "💤 IDLE")
-
-# CPU 波動圖
-cpu_history = [psutil.cpu_percent(interval=0.1) for _ in range(30)]
-st.line_chart(cpu_history)
+# 只有在 Enable System-wide Sentinel 被勾選時，才進入監控模式
+if enable_sentinel:
+    # 使用 container 的寫法，可以確保更新內容不會跳出該區塊
+    with monitor_container.container():
+        # 1. 取得數據
+        curr_cpu = psutil.cpu_percent()
+        threat_count = 0
+        if os.path.exists("threat_log.txt"):
+            with open("threat_log.txt", "r") as f:
+                threat_count = len(f.readlines())
+        
+        # 2. 顯示指標
+        cols = st.columns(3)
+        cols[0].metric("CPU Load", f"{curr_cpu}%")
+        cols[1].metric("Threats Blocked", threat_count)
+        cols[2].metric("System Status", "🛡️ Active")
+        
+        # 3. 視覺化 CPU 趨勢
+        # 這裡建議維護一個 session_state 存歷史資料，這樣才看得到「降載」的曲線
+        if "history" not in st.session_state: st.session_state.history = []
+        st.session_state.history.append(curr_cpu)
+        if len(st.session_state.history) > 30: st.session_state.history.pop(0)
+        
+        st.line_chart(st.session_state.history)
+    
+    # 4. 關鍵：設定延遲並強制刷新，以達成「即時」視覺化
+    time.sleep(1)
+    st.rerun() 
+else:
+    # 當沒有啟用 Sentinel 時，顯示靜態訊息，且不進行任何更新，確保 App 運作平穩
+    monitor_container.info("System-wide Sentinel is currently idle. Enable it in the sidebar to start live monitoring.")
 
 # ==========================================
 # 3. Execution & Process Lifecycle Logging
