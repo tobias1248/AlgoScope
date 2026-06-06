@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import traceback
+import os
 from json import JSONDecodeError
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -166,15 +167,33 @@ def get_analysis(job_id: str) -> JobRecord:
         raise HTTPException(status_code=404, detail="Analysis job not found. The server may have restarted before this job was persisted.")
     return record
 
+class SentinelToggleRequest(BaseModel):
+    enable: bool
+
 @app.post("/api/sentinel/toggle")
-def toggle_monitor(enable: bool):
-    if enable:
+def toggle_monitor(request: SentinelToggleRequest): # 改用 request 物件
+    if request.enable:
         SentinelRunner.start()
         return {"status": "Sentinel Active"}
     else:
         SentinelRunner.stop()
         return {"status": "Sentinel Inactive"}
-
+    
+@app.get("/api/sentinel/logs")
+def get_logs():
+    if not os.path.exists("threat_log.txt"):
+        return []
+    try:
+        with open("threat_log.txt", "r") as f:
+            logs = []
+            for line in f.readlines():
+                parts = line.strip().split(',')
+                if len(parts) >= 4:
+                    logs.append({"time": parts[0], "pid": parts[1], "reason": parts[3]})
+            return logs[::-1] # 反轉列表，最新的紀錄排在最上面
+    except:
+        return []
+        
 @app.websocket("/ws/system-stats")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()

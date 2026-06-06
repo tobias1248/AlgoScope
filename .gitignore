@@ -6,4 +6,10 @@ reports/
 .algoscope-runs/
 frontend/node_modules/
 frontend/dist/
+frontend/nodesource_setup.sh
 frontend/.vite
+venv/
+threat_log.txt
+node_modules/
+dist/
+.env
