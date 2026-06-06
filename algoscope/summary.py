@@ -26,7 +26,7 @@ class ReportSummary:
 
 
 class LlmSummaryService:
-    """Generate a concise OS-performance interpretation with GitHub Copilot SDK."""
+    """Generate a concise syscall interpretation with GitHub Copilot SDK."""
 
     def __init__(self, mode: SummaryMode, timeout_seconds: float = 45.0, model: str | None = None) -> None:
         self.mode = mode
@@ -43,17 +43,26 @@ class LlmSummaryService:
     ) -> ReportSummary | None:
         if self.mode == "off":
             return None
+        if not _has_syscall_data(rows):
+            if self.mode == "on":
+                raise RuntimeError("No syscall data is available for Copilot to explain.")
+            return ReportSummary(
+                title="Copilot syscall explanation unavailable",
+                body="No syscall data is available yet. Run with syscall probing enabled to request a Copilot explanation.",
+                provider="github-copilot-sdk",
+                status="unavailable",
+            )
 
         try:
             return asyncio.run(self._generate_with_copilot(program, rows, estimate, scores, metadata))
         except Exception as exc:
             if self.mode == "on":
-                raise RuntimeError(f"LLM summary generation failed: {exc}") from exc
+                raise RuntimeError(f"Copilot syscall explanation failed: {exc}") from exc
             return ReportSummary(
-                title="LLM Summary Unavailable",
+                title="Copilot syscall explanation unavailable",
                 body=(
-                    "GitHub Copilot SDK could not generate a summary in this environment. "
-                    f"Reason: {exc}. The numeric OS measurements and charts are still valid."
+                    "GitHub Copilot SDK could not generate a syscall explanation in this environment. "
+                    f"Reason: {exc} Local syscall notes are still available."
                 ),
                 provider="github-copilot-sdk",
                 status="unavailable",
@@ -93,9 +102,9 @@ class LlmSummaryService:
                     "mode": "append",
                     "content": (
                         "You are an operating-systems teaching assistant. "
-                        "Explain Linux syscall and resource measurement data for students. "
-                        "Prioritize displayed syscalls, kernel-facing behavior, I/O overhead, system time, and RSS. "
-                        "Do not claim formal proof of Big O complexity. "
+                        "Explain only the Linux syscalls shown in the provided AlgoScope data. "
+                        "Connect each syscall to likely kernel-facing behavior in the submitted Python program. "
+                        "Do not summarize Big O, timing charts, memory charts, or general performance unless it directly clarifies a syscall. "
                         "Return concise Traditional Chinese Markdown only."
                     ),
                 },
@@ -111,7 +120,7 @@ class LlmSummaryService:
             raise RuntimeError("Copilot returned an empty summary")
 
         return ReportSummary(
-            title="LLM OS Performance Summary",
+            title="Copilot syscall explanation",
             body=body,
             provider="github-copilot-sdk",
             status="generated",
@@ -127,56 +136,36 @@ class LlmSummaryService:
     ) -> str:
         measurements = "\n".join(
             (
-                f"- n={row.size}: wall={fmt_ms(row.wall_ms)} ms, user={fmt_ms(row.user_ms)} ms, "
-                f"system={fmt_ms(row.system_ms)} ms, RSS={fmt_int(row.memory_kb)} KB, "
-                f"syscalls={fmt_int(row.syscall_count)}, top_syscalls={row.top_syscalls or 'n/a'}"
+                f"- n={row.size}: syscalls={fmt_int(row.syscall_count)}, "
+                f"top_syscalls={row.top_syscalls or 'n/a'}, "
+                f"system_time={fmt_ms(row.system_ms)} ms"
             )
             for row in rows
         )
-        best_scores = "\n".join(
-            f"- {score.name}: normalized_rmse={score.normalized_rmse:.4f}" for score in scores[:3]
-        )
-        probe_commands = metadata.get("probe_commands", [])
-        probes = "\n".join(
-            f"- {probe.get('title')}: {probe.get('command')} ({probe.get('status')})"
-            for probe in probe_commands
-            if isinstance(probe, dict)
-        )
-        syscall_explanations = metadata.get("syscall_explanations", [])
-        syscall_notes = "\n".join(
-            f"- {item.get('name')}: calls={item.get('calls')}, meaning={item.get('meaning')}, signal={item.get('signal')}"
-            for item in syscall_explanations
-            if isinstance(item, dict)
-        )
+        submitted_code = _program_excerpt(program)
 
-        return f"""請根據以下 AlgoScope 報告資料，寫一段給作業系統課學生看的摘要。
+        return f"""請根據以下 AlgoScope syscall 資料，寫給作業系統課學生看的 syscall 解釋。
 
 要求：
 - 使用繁體中文。
-- 只輸出 4 到 6 個 bullet points。
-- 優先解釋顯示出來的 syscall：它們通常代表什麼 kernel 行為，以及這個程式為什麼會觸發它們。
-- 接著連到 resource usage：system CPU time、RSS memory、I/O overhead、process startup overhead。
-- Big O 只能放在最後輔助說明，且要說這是 observed growth pattern，不是形式化證明。
-- 如果 syscall 資料是 n/a，請明確說明需要 Linux strace 才能完整觀察 syscall。
+- 只輸出 3 到 5 個 bullet points。
+- 只解釋 Syscall measurements 裡實際出現的 syscall。
+- 每個 bullet 盡量包含：syscall 名稱、它通常代表的 kernel 行為、這個 Python 程式或 Python runtime 可能為什麼觸發它。
+- 如果 syscall 看起來是 Python interpreter startup/import/runtime 行為，而不是使用者演算法本身，請明確說出。
+- 可以短提 system time 或 syscall count，但只在它能幫助理解 syscall 時提。
+- 不要分析 Big O、不要評估演算法複雜度、不要總結整體效能。
 - 不要加入不存在的數據。
 
 Program: {program.name}
-Estimated complexity: {estimate}
 Platform: {metadata.get("platform")}
-Time tool: {metadata.get("time_tool")}
-strace: {metadata.get("strace")}
 
-Measurements:
+Submitted code:
+```python
+{submitted_code}
+```
+
+Syscall measurements:
 {measurements}
-
-Best model scores:
-{best_scores}
-
-OS probes:
-{probes}
-
-Local syscall explanations:
-{syscall_notes or 'n/a'}
 """
 
     @staticmethod
@@ -186,13 +175,34 @@ Local syscall explanations:
         return asdict(summary)
 
 
-def _github_token() -> str | None:
-    token = os.getenv("GITHUB_TOKEN")
-    if token:
-        return token
+def _github_token() -> str:
+    for env_name in ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+        token = os.getenv(env_name)
+        if token:
+            return token
+
     if shutil.which("gh") is None:
-        return None
-    result = subprocess.run(["gh", "auth", "token"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip() or None
+        raise RuntimeError("Set COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN; GitHub CLI is not installed.")
+
+    result = subprocess.run(["gh", "auth", "token"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+
+    raise RuntimeError(
+        "Set COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN. "
+        "The installed GitHub CLI could not provide a token with `gh auth token`; `gh auth status` alone is not enough."
+    )
+
+
+def _has_syscall_data(rows: list[Measurement]) -> bool:
+    return any(row.syscall_count is not None or row.top_syscalls for row in rows)
+
+
+def _program_excerpt(program: Path, limit: int = 4000) -> str:
+    try:
+        code = program.read_text(encoding="utf-8")
+    except OSError:
+        return "# source unavailable"
+    if len(code) <= limit:
+        return code
+    return f"{code[:limit]}\n# ... truncated ..."
