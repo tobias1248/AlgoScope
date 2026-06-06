@@ -33,13 +33,12 @@ def sentinel_mode():
                     if proc.pid != os.getpid() and proc.info['name'] == 'python3':
                         msg = "Managed" if is_managed_process(proc) else "MALICIOUS"
                         
-                        # 紀錄並撲殺
-                        now = datetime.datetime.now().strftime("%H:%M:%S")
-                        print(f"[{now}] 🔥 Detected {msg} Process: {proc.pid}, Killing...")
-                        
-                        # 寫入威脅紀錄檔 (供 app.py 讀取計數)
-                        with open("threat_log.txt", "a") as f:
-                            f.write("1\n")
+                    # 紀錄並撲殺
+                    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    log_entry = f"{now},{proc.pid},{msg}\n"
+
+                    with open("threat_log.txt", "a") as f:
+                        f.write(log_entry)
                             
                         proc.send_signal(signal.SIGKILL)
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):

@@ -94,40 +94,49 @@ else:
 # 即時監控按鈕功能
 st.subheader("Live Threat Map (Real-time Audit)")
 
-# 建立一個佔位容器，這是監控顯示的家
-monitor_container = st.empty()
+# 設置自動刷新：每 1000 毫秒 (1秒) 刷新一次，這只會更新 UI 元件，不會重跑整個程式
+count = st_autorefresh(interval=1000, key="datarefresh")
 
-# 只有在 Enable System-wide Sentinel 被勾選時，才進入監控模式
+# 建立固定容器
+monitor_container = st.container()
+
 if enable_sentinel:
-    # 使用 container 的寫法，可以確保更新內容不會跳出該區塊
-    with monitor_container.container():
-        # 1. 取得數據
-        curr_cpu = psutil.cpu_percent()
-        threat_count = 0
-        if os.path.exists("threat_log.txt"):
+    with monitor_container:
+        # 採樣間隔設為 0，改用前一次的數據，這樣才不會阻塞 UI
+        curr_cpu = psutil.cpu_percent(interval=None) 
+        
+        # 讀取威脅檔案
+        try:
             with open("threat_log.txt", "r") as f:
                 threat_count = len(f.readlines())
+        except:
+            threat_count = 0
+            
+        col1, col2, col3 = st.columns(3)
+        col1.metric("CPU Load", f"{curr_cpu}%")
+        col2.metric("Threats Blocked", threat_count)
+        col3.metric("Status", "🛡️ Active")
         
-        # 2. 顯示指標
-        cols = st.columns(3)
-        cols[0].metric("CPU Load", f"{curr_cpu}%")
-        cols[1].metric("Threats Blocked", threat_count)
-        cols[2].metric("System Status", "🛡️ Active")
+        # CPU 歷史波動圖 (使用列表紀錄)
+        if "cpu_history" not in st.session_state: st.session_state.cpu_history = [0]*30
+        st.session_state.cpu_history.append(curr_cpu)
+        if len(st.session_state.cpu_history) > 30: st.session_state.cpu_history.pop(0)
         
-        # 3. 視覺化 CPU 趨勢
-        # 這裡建議維護一個 session_state 存歷史資料，這樣才看得到「降載」的曲線
-        if "history" not in st.session_state: st.session_state.history = []
-        st.session_state.history.append(curr_cpu)
-        if len(st.session_state.history) > 30: st.session_state.history.pop(0)
-        
-        st.line_chart(st.session_state.history)
-    
-    # 4. 關鍵：設定延遲並強制刷新，以達成「即時」視覺化
-    time.sleep(1)
-    st.rerun() 
+        st.line_chart(st.session_state.cpu_history)
 else:
-    # 當沒有啟用 Sentinel 時，顯示靜態訊息，且不進行任何更新，確保 App 運作平穩
-    monitor_container.info("System-wide Sentinel is currently idle. Enable it in the sidebar to start live monitoring.")
+    monitor_container.info("Sentinel is OFF.")
+    
+with st.expander("🛡️ Recent Threat Log (Click to view history)"):
+    if os.path.exists("threat_log.txt"):
+        with open("threat_log.txt", "r") as f:
+            logs = f.readlines()[-10:] # 只讀取最後 10 筆
+            for log in reversed(logs):
+                # 這裡假設你的 log 格式是 時間,PID,類型
+                parts = log.strip().split(',')
+                if len(parts) == 3:
+                    st.write(f"🕒 **{parts[0]}** | 💀 PID: `{parts[1]}` | 類別: `{parts[2]}`")
+    else:
+        st.write("No threats recorded yet.")
 
 # ==========================================
 # 3. Execution & Process Lifecycle Logging
