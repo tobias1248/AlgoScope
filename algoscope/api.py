@@ -166,9 +166,12 @@ def get_analysis(job_id: str) -> JobRecord:
         raise HTTPException(status_code=404, detail="Analysis job not found. The server may have restarted before this job was persisted.")
     return record
 
+class SentinelToggleRequest(BaseModel):
+    enable: bool
+
 @app.post("/api/sentinel/toggle")
-def toggle_monitor(enable: bool):
-    if enable:
+def toggle_monitor(request: SentinelToggleRequest): # 改用 request 物件
+    if request.enable:
         SentinelRunner.start()
         return {"status": "Sentinel Active"}
     else:
